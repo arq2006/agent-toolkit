@@ -1,26 +1,25 @@
-# Primeira tarefa para Claude Code — F0 (documentação e contratos)
+# Roteiro de início para Claude Code
 
-Este arquivo é o roteiro inicial. Não tente implementar todo o ecossistema em um único PR.
+Este arquivo orienta qualquer sessão de trabalho. Não tente implementar o ecossistema em um único PR.
 
-## Objetivo
-Preparar o Agent Toolkit para desenvolvimento seguro e reutilizável: importar as fontes completas, validar as regras do repositório público e desenhar os primeiros contratos de agentes/skills. **Não** instalar Hermes, FreeLLMAPI, ElevenLabs, servidores MCP ou ativar Agent Teams nesta fase.
+## Estado atual (atualizado na F0.2)
+- **GH-F0 / F0.1 concluída:** PDF e roadmap de segurança geral importados sem alterações (PRs #1 e #2), com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256).
+- **GH-F0 / F0.2 (consolidação documental):** numeração de fases, arquitetura de diretórios ([ARQUITETURA.md](ARQUITETURA.md)) e estrutura de compliance ([compliance/](compliance/README.md)) documentadas. Decisões em [DECISOES.md](DECISOES.md).
+- **Próximo:** GH-F1 (agentes Claude Code), **somente após autorização humana específica**.
+- Auditoria independente do Codex: **não realizada** na F0.1 nem na F0.2 (indisponível no ambiente de nuvem); só houve revisão própria e leitura humana. Registrar o mesmo em fases futuras se continuar assim.
 
-## Instruções para a primeira sessão
-1. Abra o checkout de `arq2006/agent-toolkit` em Claude Code.
-2. Leia README.md, CLAUDE.md, AGENTS.md, docs/ROADMAP_IMPLEMENTACAO.md, docs/DECISOES.md e docs/FONTES_E_IMPORTACAO.md.
-3. Confirme `git status`, branch, HEAD e arquivos locais; preserve todo trabalho que não seja seu.
-4. Faça AUDIT 0 estritamente read-only da estrutura, segurança de publicação e documentação disponível.
-5. Localize os dois documentos completos já fornecidos pelo usuário, conforme FONTES_E_IMPORTACAO.md. Se ausentes, **não os invente**.
-6. Entregue um plano pequeno de mudança para F0.1: importação íntegra dos documentos, índices e política de contribuição. Não iniciar escrita até o usuário aprovar escopo.
-7. Depois da aprovação, crie branch `docs/import-source-plans` a partir da base confirmada, copie os arquivos verificados, execute a validação e abra PR em rascunho. Nunca faça merge.
-8. Para F1, proponha apenas 3 agentes iniciais e suas permissões; espere uma tarefa própria.
+## Restrições que continuam valendo
+Não instalar Hermes, FreeLLMAPI, ElevenLabs ou servidores MCP, não ativar Agent Teams, hooks ativos nem automações, e não criar agentes ou scripts executáveis sem uma tarefa autorizada.
 
-## Critérios de aceite F0.1
-- PDF e roadmap geral completos no Git sem alteração silenciosa.
-- Ausência de segredos ou dados pessoais indevidos.
-- Checksums registrados e documentação com links internos funcionais.
-- Mudanças restritas a documentação/índices; sem serviços externos, hooks ativos ou mudanças de máquinas.
-- PR com evidências de verificação e ressalvas claras.
+## Instruções para cada sessão
+1. Leia README.md, CLAUDE.md, AGENTS.md, docs/ROADMAP_IMPLEMENTACAO.md, docs/DECISOES.md e docs/FONTES_E_IMPORTACAO.md.
+2. Confirme `git status`, branch e HEAD; preserve todo trabalho que não seja seu.
+3. Verifique a integridade: `cd docs && sha256sum -c CHECKSUMS.sha256`.
+4. Faça o inventário da etapa em modo read-only e apresente o plano (escopo, arquivos, testes, riscos). Aguarde aprovação.
+5. Crie branch própria a partir da `main` atualizada, faça commits pequenos com stage explícito e abra PR em rascunho. Nunca faça merge.
 
-## Entrega que quero ver
-Um resumo com: branch e HEAD, arquivos identificados, riscos públicos, arquivos alterados, testes/checks, pendências, comandos executados e URL do PR. Se não encontrou documentos, reportar bloqueio e indicar os caminhos esperados sem improvisar conteúdo.
+## Para a GH-F1 (quando autorizada)
+Propor apenas 3 agentes iniciais (planejador, implementador, auditor/revisor) e suas permissões, seguindo o layout de [ARQUITETURA.md](ARQUITETURA.md) e verificando a documentação oficial atual do Claude Code antes de definir a materialização em `.claude/`.
+
+## Entrega esperada de cada tarefa
+Branch e HEAD, arquivos alterados, decisões, testes/validações, riscos, pendências, comandos executados e URL do PR.

@@ -6,7 +6,7 @@ Desenvolver um toolkit reutilizável de agentes, skills, orquestração, ferrame
 ## Início obrigatório de cada sessão
 1. Ler README.md, AGENTS.md, docs/ROADMAP_IMPLEMENTACAO.md, docs/DECISOES.md e docs/FONTES_E_IMPORTACAO.md.
 2. Confirmar branch e estado do Git sem sobrescrever alterações existentes.
-3. Verificar o que há de fato em docs/ antes de alegar que o PDF ou o roadmap de segurança completo foi importado.
+3. Verificar o que há de fato em docs/ (inclusive `sha256sum -c` em docs/CHECKSUMS.sha256) antes de alegar o estado dos documentos importados em docs/references/ e docs/security/; não editá-los.
 4. Apresentar escopo, arquivos pretendidos, testes, riscos e dependências antes de implementar.
 5. Fazer inventário e planejamento em modo read-only quando iniciar uma etapa nova.
 
@@ -32,7 +32,10 @@ Desenvolver um toolkit reutilizável de agentes, skills, orquestração, ferrame
 AUDIT READ-ONLY → PLANO → APROVAÇÃO DE ESCOPO → IMPLEMENTAÇÃO MÍNIMA → TESTES → AUDITORIA INDEPENDENTE → CORREÇÃO → PR DRAFT → REVISÃO HUMANA.
 
 ## Quando começar o código
-Seguir docs/HANDOFF_CLAUDE.md. Primeiro concluir importação das fontes completas e definição de contratos de agentes/skills. Evitar ativar experimental Agent Teams ou conectar APIs por padrão.
+Seguir docs/HANDOFF_CLAUDE.md. A importação das fontes completas (F0.1) e a consolidação documental (F0.2: fases, arquitetura de diretórios e compliance) estão registradas em docs/DECISOES.md; a F1 só começa com autorização humana específica. Antes de criar agentes e skills, definir seus contratos. Evitar ativar experimental Agent Teams ou conectar APIs por padrão.
+
+## Numeração de fases
+Usar sempre o prefixo: **GH-F0 a GH-F6** (roadmap técnico deste repositório, referência operacional) e **PDF-F0 a PDF-F7** (plano original, preservado). Correspondência em docs/adr/ADR-006-correspondencia-de-fases.md.
 
 ## Idioma e registros
 Conversa, explicações e prompts: português brasileiro. Branches, mensagens de commit e títulos de PR: inglês. Documentar decisões relevantes em docs/DECISOES.md.
