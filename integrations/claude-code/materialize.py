@@ -5,7 +5,8 @@ Só biblioteca padrão + PyYAML. Sem rede, sem shell, sem instalar nada.
 Subcomandos (opção global --root só para testes em diretório descartável):
   agents [--write]      dry-run por padrão (mostra o diff); --write grava só o que tem
                         `materialize: true`, depois de validar TODOS os agentes, sem sobrescrever.
-  git-state             imprime JSON do estado Git (somente leitura); erro se algum comando Git falhar.
+  git-state [--out F]   estado Git em JSON (somente leitura); erro se algum comando Git falhar.
+                        --out grava o snapshot (0600) fora do repositório, em diretório sem acesso de grupo/outros.
   compare A.json B.json compara estado inicial e final.
 
 Validações implementadas (ver docs/materializacao-claude-code.md): nome, mapeamento sem chaves
@@ -13,7 +14,7 @@ desconhecidas, ferramentas conhecidas, planner/auditor só com Read/Grep/Glob, A
 contrato de origem, modelo/esforço iguais à política, caminhos protegidos declarados, destino seguro.
 Pendente de esquema formal: stop_conditions x matriz, mapa T-xx -> ferramenta, regras `deny` de caminhos.
 """
-import argparse, difflib, hashlib, json, os, re, subprocess, sys
+import argparse, contextlib, difflib, hashlib, json, os, re, subprocess, sys
 from pathlib import Path
 
 import yaml
@@ -42,9 +43,21 @@ def inside(child, parent):
         return False
 
 
+def symlink_free(root, *parts):
+    """True se nenhum componente de root/parts (cumulativo) é link simbólico e o caminho real fica em root."""
+    p = root
+    for part in parts:
+        p = p / part
+        if p.is_symlink():
+            return False
+    return inside(p, root)
+
+
 def source_path(root, name):
+    if not symlink_free(root, "agents", name, "AGENT.md"):
+        return None
     p = root / "agents" / name / "AGENT.md"
-    return p if p.is_file() and not p.is_symlink() and inside(p, root / "agents") else None
+    return p if p.is_file() and inside(p, root / "agents") else None
 
 
 def validate(root, name, spec, meta):
@@ -127,6 +140,8 @@ def dest_errors(root, name):
             errs.append(f"{p.relative_to(root)} é link simbólico")
         elif p.exists() and not p.is_dir():
             errs.append(f"{p.relative_to(root)} não é diretório")
+    if not inside(root / ".claude", root):
+        errs.append(".claude resolve para fora da raiz")
     out = p / f"{name}.md"
     if out.is_symlink():
         errs.append(f"{out.relative_to(root)} é link simbólico")
@@ -136,6 +151,8 @@ def dest_errors(root, name):
 
 
 def plan(root):
+    if not symlink_free(root, "integrations", "claude-code", "mapping.yaml"):
+        return [], ["mapping.yaml ou diretório intermediário é link simbólico ou sai da raiz"]
     mpath = root / "integrations/claude-code/mapping.yaml"
     mapping = (yaml.safe_load(mpath.read_text()) or {}).get("agents")
     if not isinstance(mapping, dict) or not mapping:
@@ -177,16 +194,40 @@ def cmd_agents(root, write):
         elif it["new"]:
             print("sem mudanças")
     if write and rc == 0:
-        for it in items:  # só chega aqui com TODOS os agentes válidos
-            if it["spec"]["materialize"] and not it["old"]:
-                it["out"].parent.mkdir(parents=True, exist_ok=True)
-                fd = os.open(it["out"], os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
-                with os.fdopen(fd, "w") as f:
-                    f.write(it["new"])
-                print(f"gravado {it['out'].relative_to(root)}")
+        created = []
+        try:  # só chega aqui com TODOS os agentes válidos
+            for it in items:
+                if it["spec"]["materialize"] and not it["out"].exists():
+                    write_new(it["out"], it["new"])
+                    created.append(it["out"])
+                    print(f"gravado {it['out'].relative_to(root)}")
+        except BaseException as e:  # inclui interrupção do teclado
+            for out in created:  # remove só o que ESTA execução criou; nunca arquivo preexistente
+                with contextlib.suppress(OSError):
+                    out.unlink()
+            print(f"ERRO de gravação ({type(e).__name__}); removidos {len(created)} arquivo(s) criados nesta execução.")
+            if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                raise
+            return 2
     elif write:
-        print("NADA gravado: há erros (sem materialização parcial).")
+        print("NADA gravado: há erros de validação.")
     return rc
+
+
+def write_new(out, text):
+    """Cria `out` sem sobrescrever: grava em temporário exclusivo e publica com link atômico."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.tmp-{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.link(tmp, out)  # falha se `out` já existe: nunca sobrescreve
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 class GitError(RuntimeError):
@@ -211,7 +252,7 @@ def file_sha256(path):
 
 
 def git_state(root):
-    g = lambda *a: run(root, ["git", "-C", str(root), *a])
+    g = lambda *a: run(root, ["git", "--no-optional-locks", "-C", str(root), *a])
     untracked = {}
     for rel in g("ls-files", "--others", "--exclude-standard", "-z").decode().split("\0"):
         if rel:
@@ -226,6 +267,20 @@ def git_state(root):
             "untracked_sha256": untracked, "checksums_ok": chk}
 
 
+def write_snapshot(root, out, data):
+    out = Path(out)
+    parent = out.parent.resolve()
+    if inside(parent, root) or parent == root.resolve():
+        raise ValueError("snapshot deve ficar fora do repositório")
+    if not parent.is_dir() or parent.stat().st_mode & 0o077:
+        raise ValueError("diretório do snapshot deve existir e não ter acesso de grupo/outros (use umask 077; mktemp -d)")
+    if out.is_symlink():
+        raise ValueError("destino do snapshot é link simbólico")
+    fd = os.open(parent / out.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+
+
 def cmd_compare(a, b):
     A, B = (json.loads(Path(p).read_text()) for p in (a, b))
     diffs = sorted(k for k in set(A) | set(B) if A.get(k) != B.get(k))
@@ -237,13 +292,18 @@ def main(argv=None):
     p = argparse.ArgumentParser(); p.add_argument("--root", default=str(DEFAULT_ROOT))
     sp = p.add_subparsers(dest="c", required=True)
     s = sp.add_parser("agents"); s.add_argument("--write", action="store_true")
-    sp.add_parser("git-state"); c = sp.add_parser("compare"); c.add_argument("a"); c.add_argument("b")
+    g = sp.add_parser("git-state"); g.add_argument("--out"); c = sp.add_parser("compare"); c.add_argument("a"); c.add_argument("b")
     a = p.parse_args(argv); root = Path(a.root).resolve()
     try:
         if a.c == "agents":
             return cmd_agents(root, a.write)
         if a.c == "git-state":
-            print(json.dumps(git_state(root), indent=2)); return 0
+            data = json.dumps(git_state(root), indent=2)
+            if a.out:
+                write_snapshot(root, a.out, data)
+            else:
+                print(data)
+            return 0
         return cmd_compare(a.a, a.b)
     except (GitError, OSError, ValueError, yaml.YAMLError) as e:
         print(f"ERRO: {e}", file=sys.stderr); return 2
