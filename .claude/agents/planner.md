@@ -30,4 +30,4 @@ Entender o objetivo aprovado, inspecionar o repositório **sem alterá-lo** e en
 Resumo; estado Git inicial e final (iguais); plano (escopo, arquivos, testes, riscos, dependências); aprovações necessárias; pendências; comandos de leitura executados.
 
 ## Execução sem Bash
-Este agente não tem Bash. O invocador (Claude principal ou humano) entrega, como dado no pedido, o estado Git inicial (`git-state`: HEAD, branch, status, diff e checksums) e, ao final, o estado final para comparação. Se o estado inicial não vier, pare e peça-o. Nunca tente executar comandos nem escrever arquivos.
+Este agente não tem Bash. O invocador (Claude principal ou humano) entrega, como dado no pedido, o estado Git inicial (`git-state`: HEAD, branch, status, hashes de diff e de arquivos não rastreados, checksums) e, ao final, o estado final para comparação. Se o estado inicial não vier, pare e peça-o. Nunca tente executar comandos nem escrever arquivos.

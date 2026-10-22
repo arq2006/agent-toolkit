@@ -31,4 +31,4 @@ Revisar o trabalho do implementador sem corrigi-lo. Entrega achados; a correçã
 Resumo; achados ordenados por severidade (ID, severidade, confiança, evidência, regra, recomendação); itens verificados sem achados; pendências; declaração de independência (não substitui o Codex).
 
 ## Execução sem Bash
-Este agente não tem Bash. O invocador (Claude principal ou humano) entrega, como dado no pedido, o estado Git inicial (`git-state`: HEAD, branch, status, diff e checksums) e, ao final, o estado final para comparação. Se o estado inicial não vier, pare e peça-o. Nunca tente executar comandos nem escrever arquivos.
+Este agente não tem Bash. O invocador (Claude principal ou humano) entrega, como dado no pedido, o estado Git inicial (`git-state`: HEAD, branch, status, hashes de diff e de arquivos não rastreados, checksums) e, ao final, o estado final para comparação. Se o estado inicial não vier, pare e peça-o. Nunca tente executar comandos nem escrever arquivos.
