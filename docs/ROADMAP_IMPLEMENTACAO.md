@@ -1,6 +1,6 @@
 # Roadmap de implementação — Agent Toolkit
 
-Status: planejamento; **GH-F0 a GH-F1.3 concluídas** (PRs #1 a #7 integrados na main); GH-F1.4 (materialização dos agentes de leitura em `.claude/agents/`) **em revisão**; GH-F1.5, GH-F1.6 e GH-F2 a GH-F6 não iniciadas; GH-F1.7 é proposta futura não aprovada. Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. Documentos de origem importados na F0.1 (ver [README](README.md)). **Numeração:** as fases deste roadmap são **GH-F0 a GH-F6** (referência operacional); o PDF usa PDF-F0 a PDF-F7. Correspondência em [ADR-006](adr/ADR-006-correspondencia-de-fases.md). Plano da GH-F1: [plans/](plans/GH-F1-arquitetura-inicial-agentes.md).
+Status: planejamento; **GH-F0 a GH-F1.4 concluídas** (PRs #1 a #8 integrados na main); **GH-F1.5 (piloto somente leitura) preparada, aguardando acesso ao sandbox local**; GH-F1.6 e GH-F2 a GH-F6 não iniciadas; GH-F1.7 é proposta futura não aprovada. Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. Documentos de origem importados na F0.1 (ver [README](README.md)). **Numeração:** as fases deste roadmap são **GH-F0 a GH-F6** (referência operacional); o PDF usa PDF-F0 a PDF-F7. Correspondência em [ADR-006](adr/ADR-006-correspondencia-de-fases.md). Plano da GH-F1: [plans/](plans/GH-F1-arquitetura-inicial-agentes.md).
 
 ## Sequência e critérios
 

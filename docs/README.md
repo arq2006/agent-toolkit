@@ -17,6 +17,7 @@
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
 | [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) | Proposta de arquitetura dos 3 agentes da GH-F1 (planejamento) |
+| [pilotos/GH-F1-5-piloto-somente-leitura.md](pilotos/GH-F1-5-piloto-somente-leitura.md) | Protocolo do piloto somente leitura da GH-F1.5 (preparado, não executado) |
 | [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md) | Condições aprovadas do sandbox local da GH-F1.5/F1.6 (não criado) |
 | [../policies/inventario-ferramentas-integracoes.md](../policies/inventario-ferramentas-integracoes.md) | Inventário de ferramentas e integrações |
 | [../policies/matriz-riscos-permissoes-aprovacoes.md](../policies/matriz-riscos-permissoes-aprovacoes.md) | Matriz de riscos, permissões e aprovações |
