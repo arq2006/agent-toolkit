@@ -110,10 +110,46 @@ O login da sua conta principal vem de `SUDO_USER`/`OWNER` e é validado (ver §3
   git -C /home/agent-pilot/agent-toolkit remote -v
   echo "OK passo 4" )
 ```
-Se o clone já existir, parar. Para o piloto, use o commit da `main` que você aprovar (`git -C … rev-parse HEAD` registrado nas evidências).
+Se o clone já existir, parar. Neste ponto o clone está na `main`, que **ainda não contém** `examples/sandbox-fixture/` (ela existe só no PR #9). O passo 4b traz a revisão exata aprovada.
+
+### Passo 4b — obter a revisão aprovada do PR #9, só no clone de `agent-pilot`
+Um arquivo não pode conter o SHA do próprio commit; por isso o SHA **não está neste guia**. **Você** define `APPROVED_SHA` com o SHA do HEAD do PR #9 que aprovar (40 caracteres hexadecimais minúsculos), na mesma sessão do bloco: `export APPROVED_SHA=<40 hex>`. O bloco **para** se a variável estiver vazia ou fora desse formato. Ele busca **somente** `refs/pull/9/head`, confere que o commit obtido é **exatamente** o SHA aprovado, faz checkout (destacado) **apenas** neste clone e verifica que a fixture, os dois agentes e o gerador estão presentes e que o PR não alterou o gerador nem os documentos protegidos. Não há push, merge nem `reset`; o seu clone pessoal não é tocado.
+```
+( set -euo pipefail
+  TK=/home/agent-pilot/agent-toolkit
+  [ "$(id -un)" = agent-pilot ] || { echo "PARAR: usuário errado"; exit 1; }
+  APPROVED_SHA="${APPROVED_SHA:-}"
+  [[ "$APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "PARAR: defina APPROVED_SHA com os 40 caracteres hexadecimais do HEAD aprovado do PR #9"; exit 1; }
+  [ -d "$TK/.git" ] && [ ! -L "$TK" ] && [ "$(realpath -e "$TK")" = "$TK" ] || { echo "PARAR: clone ausente ou com link"; exit 1; }
+  cd "$TK"
+  [ -z "$(git status --porcelain)" ] || { echo "PARAR: clone com alterações"; exit 1; }
+  [ "$(git remote get-url origin)" = https://github.com/arq2006/agent-toolkit ] || { echo "PARAR: origin inesperado"; exit 1; }
+  git fetch --no-tags origin refs/pull/9/head                       # só o PR #9 (vai para FETCH_HEAD)
+  FETCHED="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+  [ "$FETCHED" = "$APPROVED_SHA" ] || { echo "PARAR: o PR #9 está em $FETCHED, diferente do SHA aprovado"; exit 1; }
+  git fetch --no-tags origin main                                   # base para conferir o escopo do PR
+  git checkout --detach "$APPROVED_SHA"                             # só neste clone; árvore estava limpa
+  [ "$(git rev-parse HEAD)" = "$APPROVED_SHA" ] && [ -z "$(git status --porcelain)" ]
+  # nada além do esperado: o PR não pode ter alterado gerador, agentes, políticas nem protegidos
+  git diff --quiet origin/main "$APPROVED_SHA" -- integrations .claude agents policies docs/references docs/security docs/CHECKSUMS.sha256 || { echo "PARAR: alteração inesperada em área protegida"; exit 1; }
+  # presença dos arquivos necessários
+  for f in examples/sandbox-fixture/README.md examples/sandbox-fixture/CLAUDE.md examples/sandbox-fixture/AGENTS.md \
+           examples/sandbox-fixture/policies/matriz-riscos-permissoes-aprovacoes.md examples/sandbox-fixture/docs/ARQUITETURA.md \
+           examples/sandbox-fixture/docs/CHECKSUMS.sha256 examples/sandbox-fixture/docs/security/Roadmap_Seguranca_Geral_v3.md \
+           examples/sandbox-fixture/src/calculadora.py examples/sandbox-fixture/tests/test_calculadora.py examples/sandbox-fixture/workflows/tarefa-exemplo.md \
+           .claude/agents/planner.md .claude/agents/auditor.md integrations/claude-code/materialize.py integrations/claude-code/mapping.yaml docs/setup/arch-linux.md; do
+    [ -f "$f" ] && [ ! -L "$f" ] || { echo "PARAR: arquivo ausente ou link: $f"; exit 1; }
+  done
+  [ ! -e .claude/agents/implementer.md ] || { echo "PARAR: implementer não pode existir"; exit 1; }
+  (cd docs && sha256sum -c CHECKSUMS.sha256)
+  (cd examples/sandbox-fixture/docs && sha256sum -c CHECKSUMS.sha256)
+  echo "revisão $(git rev-parse HEAD) confere com APPROVED_SHA"
+  echo "OK passo 4b" )
+```
+Se o PR #9 já tiver sido integrado, defina `APPROVED_SHA` com o commit da `main` que você aprovar e troque `refs/pull/9/head` por `refs/heads/main` **neste bloco**, mantendo as demais verificações (decisão sua; não faça isso sem registrar o SHA nas evidências). Registre `APPROVED_SHA` nas evidências do piloto.
 
 ## 5. Sandbox Git fictício, sem remoto [REQUER AUTORIZAÇÃO]
-O conteúdo vem de [examples/sandbox-fixture/](../../examples/sandbox-fixture/): README, `CLAUDE.md`, `AGENTS.md`, política de permissões, arquitetura, documentos "protegidos" com `CHECKSUMS.sha256`, tarefa de exemplo, um módulo pequeno e testes. É tudo **fictício** (nada de projetos reais) e coerente com as referências usadas por `planner` e `auditor` (`../../CLAUDE.md`, `../../AGENTS.md`, `../../policies/matriz-riscos-permissoes-aprovacoes.md`, `../../docs/security/Roadmap_Seguranca_Geral_v3.md`, `sha256sum -c docs/CHECKSUMS.sha256`).
+O conteúdo vem de [examples/sandbox-fixture/](../../examples/sandbox-fixture/), obtido pelo passo 4b na revisão aprovada: README, `CLAUDE.md`, `AGENTS.md`, política de permissões, arquitetura, documentos "protegidos" com `CHECKSUMS.sha256`, tarefa de exemplo, um módulo pequeno e testes. É tudo **fictício** (nada de projetos reais) e coerente com as referências usadas por `planner` e `auditor` (`../../CLAUDE.md`, `../../AGENTS.md`, `../../policies/matriz-riscos-permissoes-aprovacoes.md`, `../../docs/security/Roadmap_Seguranca_Geral_v3.md`, `sha256sum -c docs/CHECKSUMS.sha256`).
 
 ### Passo 5 — criar o repositório (como `agent-pilot`)
 O bloco exige que `HOME` seja exatamente `/home/agent-pilot` e real, rejeita link simbólico no clone, no sandbox e na origem fictícia, e confirma que o destino real do sandbox é **exatamente** `/home/agent-pilot/agent-toolkit-sandbox`, antes e depois de criar. Nada é gravado por link para outro diretório.
@@ -211,7 +247,7 @@ Esperado: ferramentas `Read, Grep, Glob`; `probe.txt` inexistente; leitura do ca
   $PY compare "$EV/inicial.json" "$EV/final.json"                        # esperado: idêntico
   echo "OK passo 8" )
 ```
-Coletar: versão do Claude Code; saídas dos passos 3, 7, 7b e 8; `total_cost_usd`, `usage` e `duration_ms` de `planner.json` e `auditor.json`; relatos; falhas. Os JSONs ficam só em `pilot-evidence` (privado): não colar snapshots em PR/issue (têm nomes e hashes de arquivos não rastreados). Não apagar o sandbox: a remoção é decisão humana.
+Coletar: versão do Claude Code; `APPROVED_SHA` usado; saídas dos passos 3, 4b, 7, 7b e 8; `total_cost_usd`, `usage` e `duration_ms` de `planner.json` e `auditor.json`; relatos; falhas. Os JSONs ficam só em `pilot-evidence` (privado): não colar snapshots em PR/issue (têm nomes e hashes de arquivos não rastreados). Não apagar o sandbox: a remoção é decisão humana.
 
 ## 8. Verificação sintática do roteiro
 Todos os blocos de código deste guia foram extraídos e passam em `bash -n` **sem substituir nada** (não há placeholder). Reexecutar: `python3` extraindo os blocos delimitados por três crases e `bash -n` em cada um; o resultado de 22/10/2026 está no PR #9. `bash -n` só prova sintaxe; a execução real continua pendente.
