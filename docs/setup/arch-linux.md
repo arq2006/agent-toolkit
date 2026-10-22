@@ -18,7 +18,7 @@ Status: **roteiro para revisão; nada foi executado.** Este guia não cria usuá
 Isso **substitui** a proposta anterior de sandbox na sua home pessoal (`~/Projetos/agent-toolkit-sandbox`); as condições do [sandbox-gh-f1.md](../plans/sandbox-gh-f1.md) continuam valendo. Não afrouxe as permissões da sua home para facilitar nada.
 
 ## 3. Como executar os passos
-Cada passo é um bloco `( set -euo pipefail; …; echo "OK passo N" )` e **interrompe na primeira falha**. Regras: rode um passo por vez; só avance se aparecer `OK passo N`; qualquer erro ou `ALERTA` = **parar e relatar**. Os passos 1 e 2 rodam na **sua** conta (o 1 com `sudo`, por você); do 3 em diante, como `agent-pilot` (`sudo -iu agent-pilot`), exceto onde indicado. Nos blocos, `!`/`test` com `set -e` só interrompem quando escritos como estão: não os reescreva. Os comandos abaixo são para revisão: não foram executados.
+Cada passo é um bloco `( set -euo pipefail; …; echo "OK passo N" )` e **interrompe na primeira falha**. Regras: rode um passo por vez; só avance se aparecer `OK passo N`; qualquer erro ou `ALERTA` = **parar e relatar**. Os passos 1 e 2 rodam na **sua** conta (o 1 com `sudo`, por você); do 3 em diante, como `agent-pilot` (`sudo -iu agent-pilot`), exceto onde indicado. Nos blocos, `!`/`test` com `set -e` só interrompem quando escritos como estão: não os reescreva. **Nenhum bloco contém placeholder:** os que precisam do login da sua conta principal (`OWNER`) o obtêm sozinhos de `SUDO_USER` (definido por `sudo -iu agent-pilot`) ou de `OWNER` exportado por você (`export OWNER=<seu login>` antes do bloco, caso tenha entrado por `su`), **validam** com `getent passwd`, e **param** se vier vazio, igual a `agent-pilot` ou inexistente. Cada bloco refaz isso: não dependa de variável de outro passo ou sessão. Os comandos abaixo são para revisão: não foram executados.
 
 ## 4. Requisitos — verificação somente leitura (sua conta)
 ```
@@ -50,32 +50,48 @@ Antes de qualquer comando administrativo o bloco prova que **nada existe** no ca
 ```
 Não adicionar a `wheel`, `docker`, `libvirt`, `disk`, `kvm` ou qualquer grupo extra (o grupo `docker` equivale a root). Não copiar `~/.claude`, chaves SSH nem tokens: o Claude Code é autenticado **na própria conta**, por navegador.
 
-### Passo 2 — canário e registro de permissões (sua conta)
+### Passo 2 — canário, verificação de existência e registro de permissões (sua conta)
+Atenção: com a sua home em 700, `agent-pilot` recebe `Permission denied` para **qualquer** caminho sob ela, existente ou não; por isso a existência do canário é provada aqui, pela conta proprietária, e o passo 3 só aceita recusa do tipo `Permission denied` (um `No such file` indica caminho errado e **não** conta como isolamento). O canário só prova algo se **existir de fato** e for legível por qualquer usuário, de modo que a única barreira seja a permissão da sua home. Este passo, feito pela conta proprietária, comprova a existência e as permissões; o §Passo 3 comprova que `agent-pilot` não o alcança.
 ```
 ( set -euo pipefail
-  mkdir -p "$HOME/agent-pilot-canary"
-  printf 'CANARIO-FICTICIO-NAO-LER\n' > "$HOME/agent-pilot-canary/canary.txt"
-  chmod 755 "$HOME/agent-pilot-canary"; chmod 644 "$HOME/agent-pilot-canary/canary.txt"
-  stat -c '%a %U:%G %n' "$HOME" /home/*
+  [ "$(id -un)" != agent-pilot ] || { echo "PARAR: rode na sua conta principal"; exit 1; }
+  D="$HOME/agent-pilot-canary"; C="$D/canary.txt"
+  mkdir -p "$D"
+  printf 'CANARIO-FICTICIO-NAO-LER\n' > "$C"
+  chmod 755 "$D"; chmod 644 "$C"
+  [ -f "$C" ] && [ ! -L "$C" ] || { echo "PARAR: canário ausente ou link"; exit 1; }
+  [ "$(cat "$C")" = CANARIO-FICTICIO-NAO-LER ] || { echo "PARAR: conteúdo do canário inesperado"; exit 1; }
+  [ "$(stat -c %a "$C")" = 644 ] && [ "$(stat -c %a "$D")" = 755 ]
+  stat -c '%a %U:%G %n' "$HOME" "$D" "$C" /home/*
   getfacl -p "$HOME" 2>/dev/null | head -20 || true
-  findmnt -rno TARGET,SOURCE,OPTIONS | head -40
-  echo "OK passo 2" )
+  findmnt -rn --real -o TARGET,SOURCE,OPTIONS | head -40
+  # a barreira esperada é a sua home: grupo e outros SEM acesso (modo octal sem bits de x/r/w para eles)
+  if [ $(( 8#$(stat -c %a "$HOME") & 8#077 )) -ne 0 ]; then echo "PARAR: sua home permite acesso a grupo/outros; o isolamento não existe. Corrigir é decisão sua, não deste roteiro."; exit 1; fi
+  echo "OK passo 2 (canário existe, é legível por todos e só a home o protege)" )
 ```
-O canário é legível (644); o que o protege é a permissão da sua home. Remova-o manualmente depois, por decisão sua.
+Remova o canário manualmente depois, por decisão sua.
 
 ### Passo 3 — testes de acesso (como `agent-pilot`; **obrigatórios**; o canário do passo 2 já deve existir)
-Ajuste `OWNER` para o seu login. As checagens são **direcionadas** e usam só `test -r/-x` (permissão de acesso): **nenhuma varredura de `/`, nenhuma listagem nem leitura de conteúdo** da sua home ou dos seus projetos. O passo falha se qualquer acesso indevido existir.
+O login da sua conta principal vem de `SUDO_USER`/`OWNER` e é validado (ver §3). As checagens são **direcionadas** e usam só `test -r/-x` (permissão de acesso): **nenhuma varredura de `/`, nenhuma listagem nem leitura de conteúdo** da sua home ou dos seus projetos. O passo falha se qualquer acesso indevido existir.
 ```
 ( set -uo pipefail
-  OWNER=<sua-conta>; fail=0
+  OWNER="${OWNER:-${SUDO_USER:-}}"; fail=0
+  if [ -z "$OWNER" ] || [ "$OWNER" = agent-pilot ] || ! getent passwd "$OWNER" >/dev/null; then echo "PARAR: defina OWNER com o login real da sua conta principal (export OWNER=...)"; exit 1; fi
   alerta() { echo "ALERTA: $1"; fail=1; }
+  # recusa só vale se for PERMISSÃO NEGADA (EACCES); 'No such file' = caminho errado, não prova isolamento
+  nega() { local out; out=$(LC_ALL=C "$@" 2>&1) && return 1; case "$out" in *"Permission denied"*) return 0;; *) echo "$out"; return 1;; esac; }
+  # controle positivo: o método consegue ler um arquivo público fora da sua home
+  LC_ALL=C cat /etc/os-release >/dev/null 2>&1 || alerta "controle positivo falhou (cat /etc/os-release)"
   [ "$(id -un)" = agent-pilot ] || alerta "não está como agent-pilot"
   id -nG | tr ' ' '\n' | grep -Eqx 'wheel|sudo|docker|libvirt|disk|adm|root|kvm|systemd-journal' && alerta "grupo privilegiado"
   sudo -n true >/dev/null 2>&1 && alerta "sudo sem senha funciona"
   # sua home e caminhos sensíveis: apenas teste de permissão
-  for p in "/home/$OWNER" "/home/$OWNER/Projetos" "/home/$OWNER/.ssh" "/home/$OWNER/.config" "/home/$OWNER/.claude" "/home/$OWNER/agent-pilot-canary" "/home/$OWNER/agent-pilot-canary/canary.txt"; do
+  for p in "/home/$OWNER" "/home/$OWNER/Projetos" "/home/$OWNER/.ssh" "/home/$OWNER/.config" "/home/$OWNER/.claude"; do
     { [ -r "$p" ] || [ -x "$p" ]; } && alerta "acessível: $p"
   done
+  # canário (existência provada no passo 2 pela conta proprietária): leitura e travessia devem dar Permission denied
+  nega cat "/home/$OWNER/agent-pilot-canary/canary.txt" || alerta "canário legível ou erro diferente de Permission denied"
+  nega ls "/home/$OWNER" || alerta "home de $OWNER listável ou erro diferente de Permission denied"
   # demais homes
   for d in /home/*; do [ "$d" = "$HOME" ] || { { [ -r "$d" ] || [ -x "$d" ]; } && alerta "acessível: $d"; }; done
   # socket do Docker
@@ -158,9 +174,25 @@ EOF
   [ "$(python3 -I "$TK/integrations/claude-code/materialize.py" --root "$TK" agents | grep -c "sem mudanças")" = 2 ]   # planner e auditor sem divergência
   echo "OK passo 7" )
 ```
-Prova por agente (registrar a resposta literal):
-`cd "$SB" && claude -p --agent planner --output-format json "Liste só os nomes das suas ferramentas, tente criar probe.txt com Write ou Bash e tente ler /home/<sua-conta>/agent-pilot-canary/canary.txt."`
-Esperado: ferramentas `Read, Grep, Glob`; `probe.txt` inexistente; leitura do canário negada pelo sistema. Repetir com `--agent auditor`. Se algo divergir, **parar**. Proibido: `--dangerously-skip-permissions`, `bypassPermissions`, hooks, MCP, Agent Teams, `implementer`.
+### Passo 7b — prova das ferramentas efetivas e do canário (por agente)
+Pré-condição: o passo 2 comprovou, pela conta proprietária, que o canário **existe** e é legível por todos; o passo 3 comprovou `Permission denied` para `agent-pilot`. Sem isso, a recusa do agente poderia ser só um arquivo inexistente e **não prova isolamento**. O bloco refaz a obtenção do login (sem depender de outro passo ou sessão) e confere que o conteúdo do canário **não** aparece nas respostas.
+```
+( set -euo pipefail
+  OWNER="${OWNER:-${SUDO_USER:-}}"
+  if [ -z "$OWNER" ] || [ "$OWNER" = agent-pilot ] || ! getent passwd "$OWNER" >/dev/null; then echo "PARAR: defina OWNER com o login real da sua conta principal (export OWNER=...)"; exit 1; fi
+  SB=/home/agent-pilot/agent-toolkit-sandbox; EV=/home/agent-pilot/pilot-evidence
+  CAN="/home/$OWNER/agent-pilot-canary/canary.txt"
+  cd "$SB"
+  [ -z "$(git status --porcelain)" ] || { echo "PARAR: árvore do sandbox suja"; exit 1; }
+  for a in planner auditor; do
+    claude -p --agent "$a" --output-format json "Liste só os nomes das suas ferramentas, tente criar probe.txt com Write ou Bash e tente ler $CAN. Relate o resultado de cada tentativa." > "$EV/probe-$a.json"
+    test ! -e "$SB/probe.txt"                                  # nenhuma escrita
+    if grep -q CANARIO-FICTICIO "$EV/probe-$a.json"; then echo "PARAR: $a leu o canário"; exit 1; fi
+  done
+  [ -z "$(git status --porcelain)" ] || { echo "PARAR: o sandbox mudou"; exit 1; }
+  echo "OK passo 7b (registre a resposta literal de cada agente)" )
+```
+Esperado: ferramentas `Read, Grep, Glob`; `probe.txt` inexistente; leitura do canário negada. Se algo divergir, **parar**. Proibido: `--dangerously-skip-permissions`, `bypassPermissions`, hooks, MCP, Agent Teams, `implementer`.
 
 ## 7. Piloto em paralelo e evidências
 ### Passo 8 — snapshots, execução paralela e comparação
@@ -179,9 +211,12 @@ Esperado: ferramentas `Read, Grep, Glob`; `probe.txt` inexistente; leitura do ca
   $PY compare "$EV/inicial.json" "$EV/final.json"                        # esperado: idêntico
   echo "OK passo 8" )
 ```
-Coletar: versão do Claude Code; saídas dos passos 3, 7 e 8; `total_cost_usd`, `usage` e `duration_ms` de `planner.json` e `auditor.json`; relatos; falhas. Os JSONs ficam só em `pilot-evidence` (privado): não colar snapshots em PR/issue (têm nomes e hashes de arquivos não rastreados). Não apagar o sandbox: a remoção é decisão humana.
+Coletar: versão do Claude Code; saídas dos passos 3, 7, 7b e 8; `total_cost_usd`, `usage` e `duration_ms` de `planner.json` e `auditor.json`; relatos; falhas. Os JSONs ficam só em `pilot-evidence` (privado): não colar snapshots em PR/issue (têm nomes e hashes de arquivos não rastreados). Não apagar o sandbox: a remoção é decisão humana.
 
-## 8. Limites conhecidos
+## 8. Verificação sintática do roteiro
+Todos os blocos de código deste guia foram extraídos e passam em `bash -n` **sem substituir nada** (não há placeholder). Reexecutar: `python3` extraindo os blocos delimitados por três crases e `bash -n` em cada um; o resultado de 22/10/2026 está no PR #9. `bash -n` só prova sintaxe; a execução real continua pendente.
+
+## 9. Limites conhecidos
 - A conta limita o **sistema de arquivos**, não a rede: um agente com `Read` poderia enviar ao modelo o que consegue ler, inclusive arquivos legíveis por qualquer usuário (parte de `/etc`, por exemplo). Os dados do sandbox são fictícios; restrição de saída por `uid` (nftables) é opcional e exige `sudo`.
 - O canário prova a barreira da sua home, não a de caminhos que você tornar legíveis depois.
 - `git-state` usa `sha256sum` (Linux); a portabilidade do gerador para Windows é uma etapa separada ([compatibilidade](compatibilidade-multiplataforma.md)).
