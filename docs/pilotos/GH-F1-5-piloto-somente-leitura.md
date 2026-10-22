@@ -1,12 +1,12 @@
 # GH-F1.5 — Piloto somente leitura (planner + auditor)
 
-Status: **preparado; NÃO executado.** O sandbox `~/Projetos/agent-toolkit-sandbox` fica na máquina de Arthur e **não foi criado**: em 22/10/2026 o caminho não aparece na listagem de `~/Projetos` (somente nomes; nada foi lido nem alterado) e esta sessão de nuvem não tem acesso aprovado a essa pasta. O piloto **não** pode ser feito em outro lugar. Condições: [sandbox-gh-f1.md](../plans/sandbox-gh-f1.md); materialização: [materializacao-claude-code.md](../materializacao-claude-code.md).
+Status: **preparado; NÃO executado.** O sandbox `/home/agent-pilot/agent-toolkit-sandbox` (conta Linux dedicada `agent-pilot`, decisão de Arthur em 22/10/2026) fica na máquina dele e **não foi criado**: a conta ainda não existe e a sessão de nuvem não tem acesso à máquina. O piloto **não** pode ser feito em outro lugar. Condições: [sandbox-gh-f1.md](../plans/sandbox-gh-f1.md); materialização: [materializacao-claude-code.md](../materializacao-claude-code.md).
 
-Roteiros de ambiente isolado por sistema (propostas, não executadas): [Arch Linux](../setup/arch-linux.md), [Windows](../setup/windows.md) e [compatibilidade](../setup/compatibilidade-multiplataforma.md). O sandbox Linux na home da conta dedicada é **proposta pendente de aprovação**; este protocolo mantém o caminho aprovado até lá.
+Roteiros de ambiente isolado por sistema (propostas, não executadas): [Arch Linux](../setup/arch-linux.md), [Windows](../setup/windows.md) e [compatibilidade](../setup/compatibilidade-multiplataforma.md). O sandbox Linux na home da conta dedicada foi **aprovado por Arthur** (caminhos em [arch-linux.md](../setup/arch-linux.md) §2); o conteúdo fictício está em [examples/sandbox-fixture/](../../examples/sandbox-fixture/).
 
 ## Pré-requisitos (todos obrigatórios)
-1. Acesso à máquina de Arthur aprovado por ele (sessão local ou pasta aprovada), limitado ao caminho do sandbox.
-2. Verificar que `~/Projetos/agent-toolkit-sandbox` **não existe ou está vazio**; se tiver qualquer arquivo, parar e relatar.
+1. Conta `agent-pilot` criada por Arthur e testes de acesso (passo 3 do guia Arch) aprovados; **a execução é feita por Arthur no notebook**, sem Remote Control nesta rodada.
+2. Verificar que `/home/agent-pilot/agent-toolkit-sandbox` **não existe ou está vazio**; se tiver qualquer arquivo, parar e relatar.
 3. Criar o repositório Git local com dados **fictícios**, sem remoto, sem tocar em outros projetos.
 4. Copiar `.claude/agents/{planner,auditor}.md` e `integrations/claude-code/` (somente leitura do toolkit) para o sandbox; `implementer` **não** é copiado.
 5. Verificar a versão do Claude Code e as permissões efetivas de cada agente (somente `Read, Grep, Glob`).
