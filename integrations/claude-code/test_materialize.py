@@ -145,6 +145,91 @@ class Materialize(Base):
         self.assertEqual(set(meta), {"name", "description", "tools", "disallowedTools", "model", "effort"})
 
 
+class Symlinks(Base):
+    def external_copy(self, rel):
+        """Move root/rel para fora e deixa um link simbólico no lugar."""
+        src = self.root / rel
+        dst = self.outside / rel.replace("/", "_")
+        shutil.move(src, dst)
+        src.symlink_to(dst)
+        return dst
+
+    def assert_refused(self):
+        rc, out, err = run(self.root, "agents", "--write")
+        self.assertNotEqual(rc, 0, out)
+        self.assertFalse((self.root / ".claude").exists())
+
+    def test_agents_dir_symlink_to_external_dir(self):
+        self.external_copy("agents")
+        self.assert_refused()
+
+    def test_agent_subdir_symlink_to_external_dir(self):
+        self.external_copy("agents/planner")
+        self.assert_refused()
+
+    def test_integrations_dir_symlink(self):
+        self.external_copy("integrations")
+        self.assert_refused()
+
+    def test_mapping_file_symlink(self):
+        self.external_copy("integrations/claude-code/mapping.yaml")
+        self.assert_refused()
+
+
+class WriteRecovery(Base):
+    def test_io_failure_rolls_back_only_created_files(self):
+        run(self.root, "agents", "--write")
+        planner = self.agents_dir() / "planner.md"
+        (self.agents_dir() / "auditor.md").unlink()
+        before = planner.read_text()
+        calls = []
+        real = M.write_new
+
+        def flaky(out, text):
+            calls.append(out.name)
+            raise OSError("falha simulada")
+        M.write_new = flaky
+        try:
+            rc, out, _ = run(self.root, "agents", "--write")
+        finally:
+            M.write_new = real
+        self.assertEqual(rc, 2)
+        self.assertEqual(planner.read_text(), before)  # preexistente intacto
+        self.assertFalse((self.agents_dir() / "auditor.md").exists())
+
+    def test_failure_after_first_file_removes_it(self):
+        real = M.write_new
+        n = []
+
+        def second_fails(out, text):
+            n.append(1)
+            if len(n) == 2:
+                raise OSError("falha simulada")
+            real(out, text)
+        M.write_new = second_fails
+        try:
+            rc, out, _ = run(self.root, "agents", "--write")
+        finally:
+            M.write_new = real
+        self.assertEqual(rc, 2)
+        self.assertEqual(list(self.agents_dir().glob("*")), [])
+
+    def test_rerun_is_idempotent_and_never_overwrites(self):
+        self.assertEqual(run(self.root, "agents", "--write")[0], 0)
+        first = {p.name: p.read_text() for p in self.agents_dir().iterdir()}
+        self.assertEqual(run(self.root, "agents", "--write")[0], 0)
+        self.assertEqual(first, {p.name: p.read_text() for p in self.agents_dir().iterdir()})
+
+    def test_write_new_refuses_existing_file(self):
+        self.agents_dir().mkdir(parents=True)
+        f = self.agents_dir() / "x.md"
+        f.write_text("antigo")
+        with self.assertRaises(FileExistsError):
+            M.write_new(f, "novo")
+        self.assertEqual(f.read_text(), "antigo")
+        self.assertEqual([p.name for p in self.agents_dir().iterdir()], ["x.md"])  # sem temporário sobrando
+
+
 class GitState(Base):
     def git(self, *a):
         env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
@@ -171,6 +256,49 @@ class GitState(Base):
         self.assertEqual(rc, 2)
         self.assertIn("ERRO", err)
         self.assertEqual(out, "")
+
+
+    def tree_fingerprint(self):
+        out = {}
+        for p in sorted(self.root.rglob("*")):
+            if ".git" in p.parts or p.is_dir():
+                continue
+            out[str(p.relative_to(self.root))] = M.file_sha256(p)
+        return out
+
+    def test_full_flow_snapshots_outside_tree_are_identical(self):
+        self.git("init", "-q"); self.git("add", "agents"); self.git("commit", "-q", "-m", "x")
+        (self.root / "novo.txt").write_text("fictício")
+        snap = Path(self._t.name) / "snaps"
+        snap.mkdir(mode=0o700)
+        before = self.tree_fingerprint()
+        a, b = snap / "inicial.json", snap / "final.json"
+        self.assertEqual(run(self.root, "git-state", "--out", str(a))[0], 0)
+        self.assertEqual(run(self.root, "git-state", "--out", str(b))[0], 0)
+        self.assertEqual(run(self.root, "compare", str(a), str(b))[0], 0)
+        self.assertEqual(a.read_text(), b.read_text())
+        self.assertEqual(before, self.tree_fingerprint())  # nada novo na árvore
+        self.assertEqual(oct(a.stat().st_mode & 0o777), "0o600")
+        self.assertNotIn("fictício", a.read_text())
+
+    def test_snapshot_inside_repo_or_open_dir_refused(self):
+        self.git("init", "-q"); self.git("add", "agents"); self.git("commit", "-q", "-m", "x")
+        rc, _, err = run(self.root, "git-state", "--out", str(self.root / "inicial.json"))
+        self.assertEqual(rc, 2)
+        self.assertFalse((self.root / "inicial.json").exists())
+        open_dir = Path(self._t.name) / "aberto"
+        open_dir.mkdir(mode=0o755)
+        os.chmod(open_dir, 0o755)
+        self.assertEqual(run(self.root, "git-state", "--out", str(open_dir / "s.json"))[0], 2)
+        self.assertFalse((open_dir / "s.json").exists())
+
+    def test_snapshot_never_overwrites_existing(self):
+        self.git("init", "-q"); self.git("add", "agents"); self.git("commit", "-q", "-m", "x")
+        snap = Path(self._t.name) / "snaps"
+        snap.mkdir(mode=0o700)
+        (snap / "s.json").write_text("antigo")
+        self.assertEqual(run(self.root, "git-state", "--out", str(snap / "s.json"))[0], 2)
+        self.assertEqual((snap / "s.json").read_text(), "antigo")
 
 
 if __name__ == "__main__":
