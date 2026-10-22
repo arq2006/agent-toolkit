@@ -18,6 +18,7 @@
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
 | [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) | Proposta de arquitetura dos 3 agentes da GH-F1 (planejamento) |
 | [setup/arch-linux.md](setup/arch-linux.md), [setup/windows.md](setup/windows.md), [setup/compatibilidade-multiplataforma.md](setup/compatibilidade-multiplataforma.md) | Roteiros de ambiente isolado (Arch e Windows), auditoria de portabilidade e sincronização (GH-F1.5; só documentação) |
+| [../examples/sandbox-fixture/](../examples/sandbox-fixture/) | Arquivos 100% fictícios que compõem o sandbox do piloto GH-F1.5 |
 | [pilotos/GH-F1-5-piloto-somente-leitura.md](pilotos/GH-F1-5-piloto-somente-leitura.md) | Protocolo do piloto somente leitura da GH-F1.5 (preparado, não executado) |
 | [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md) | Condições aprovadas do sandbox local da GH-F1.5/F1.6 (não criado) |
 | [../policies/inventario-ferramentas-integracoes.md](../policies/inventario-ferramentas-integracoes.md) | Inventário de ferramentas e integrações |

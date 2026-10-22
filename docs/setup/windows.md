@@ -2,6 +2,8 @@
 
 Status: **somente documentação; nada foi instalado, configurado ou executado no Windows.** Mesmos contratos, agentes, `mapping.yaml` e critérios de teste do [guia Arch Linux](arch-linux.md); aqui só mudam o ambiente e os comandos. Portabilidade do código e sincronização: [compatibilidade-multiplataforma.md](compatibilidade-multiplataforma.md). Itens sobre recursos do Windows/WSL/Hyper-V vêm de conhecimento geral e **devem ser conferidos na documentação oficial da Microsoft antes de qualquer execução**; o que cita o Claude Code vem da documentação oficial consultada em 22/10/2026 (setup, sandboxing, sandbox-environments).
 
+> **Portabilidade do gerador:** o uso nativo de `materialize.py` no Windows exige uma etapa separada de implementação e testes (ver [compatibilidade](compatibilidade-multiplataforma.md) §2). A preparação do Windows continua só documentada; nada foi executado.
+
 ## 1. O que a documentação do Claude Code diz (fatos que orientam a escolha)
 - Windows suportado: 10 versão 1809+ ou Server 2019+; shells PowerShell/CMD; Git for Windows é recomendado para a ferramenta Bash (sem ele, usa PowerShell).
 - **Windows nativo não tem o sandbox de Bash**; ele existe em macOS, Linux e **WSL2** (não no WSL1).

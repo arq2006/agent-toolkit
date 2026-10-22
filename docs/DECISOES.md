@@ -58,6 +58,7 @@ Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no
 - ~~Inventário de ferramentas e matriz de risco/aprovação (GH-F0).~~ Criados em [policies/](../policies/) (PR #4 integrado).
 - ~~GH-F1: formato dos contratos de agente, skill e tarefa.~~ Integrados na GH-F1.1 ([contratos/](contratos/README.md)).
 - ~~GH-F1.3: alvo de `open_pr` e mecanismo de materialização.~~ Resolvidos na GH-F1.3 ([ADR-010](adr/ADR-010-materializacao-em-claude-code.md), PR #7 integrado).
+- GH-F1.5 (22/10/2026, decisão de Arthur): piloto somente leitura em conta Linux dedicada `agent-pilot` no notebook Arch; clone `/home/agent-pilot/agent-toolkit`, sandbox `/home/agent-pilot/agent-toolkit-sandbox`, evidências `/home/agent-pilot/pilot-evidence` (0700); a criação da conta e a execução dependem de nova autorização; portabilidade nativa do gerador para Windows é etapa separada. Ver [setup/arch-linux.md](setup/arch-linux.md).
 - GH-F1.4 (concluída, PR #8): `implementer` em `.claude/agents/` não gravado (aguarda autorização); `@AGENTS.md` no `CLAUDE.md` aguarda decisão; esquema formal e formato do arquivo de tarefa seguem em aberto. Ver [materializacao-claude-code.md](materializacao-claude-code.md).
 - GH-F2: formato final dos artefatos de compliance e skill `legal-web-check`.
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.

@@ -29,6 +29,8 @@ Leitura de `materialize.py`, `test_materialize.py`, `mapping.yaml` e `.claude/ag
 
 Resumo: o gerador **falha de forma segura** no Windows (itens 1, 2, 6) e tem **três degradações de segurança** a corrigir antes de gravar lá (3, 4, 7/8). Não afirmo compatibilidade: está **não validada**.
 
+**Decisão registrada (22/10/2026):** a portabilidade **nativa** do gerador para Windows exige uma **etapa separada de implementação e testes** (alterações em `materialize.py`/`test_materialize.py`, `.gitattributes`, validação nos dois sistemas), sujeita a autorização própria. Enquanto ela não for feita e validada, o piloto no Windows deve rodar dentro de VM/convidado Linux, e nenhuma afirmação de compatibilidade nativa vale.
+
 ## 3. Como validar a mesma implementação nos dois SOs (proposta, após autorização das mudanças)
 1. Mesma revisão (`git rev-parse HEAD` idêntico) e Python ≥ versão mínima registrada no PR; PyYAML presente.
 2. `python -I integrations/claude-code/test_materialize.py` (Windows: `py -3 -I …`): resultados esperados iguais; **skips listados com motivo**; nenhum teste pode passar por ter sido ignorado.
