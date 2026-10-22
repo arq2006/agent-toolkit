@@ -2,7 +2,7 @@
 
 Ecossistema reutilizável de agentes de IA, skills, ferramentas e fluxos de trabalho para diferentes projetos.
 
-> Estado atual: **GH-F0 concluída; GH-F1.1 (contratos) em revisão**. Fases: GH-F0 a GH-F6 (ver [roadmap](docs/ROADMAP_IMPLEMENTACAO.md)). Nenhum agente autônomo, integração externa ou rotina de execução está habilitado por este repositório.
+> Estado atual: **GH-F0 e GH-F1.1 concluídas; GH-F1.2 (definições dos agentes, documentais) em revisão**. Fases: GH-F0 a GH-F6 (ver [roadmap](docs/ROADMAP_IMPLEMENTACAO.md)). Nenhum agente autônomo, integração externa ou rotina de execução está habilitado por este repositório.
 
 ## Objetivos
 
@@ -27,7 +27,8 @@ Ecossistema reutilizável de agentes de IA, skills, ferramentas e fluxos de trab
 
 - `docs/`: planejamento, decisões, segurança, compliance e referências (existente).
 - `policies/`: inventário de ferramentas e matriz de riscos, permissões e aprovações (existente).
-- `agents/`, `skills/`, `workflows/`: fonte neutra de agentes, skills e fluxos (futuro).
+- `agents/`: definições neutras e **documentais** de `planner`, `implementer` e `auditor` (GH-F1.2; não executáveis).
+- `skills/`, `workflows/`: fonte neutra de skills e fluxos (futuro).
 - `integrations/`: materialização para Claude Code, Codex, Hermes, MCP e adaptador modelo (futuro).
 - `.claude/`: camada de materialização para Claude Code (GH-F1).
 - `experiments/`, `src/`, `tests/`, `examples/`, `scripts/`: somente quando houver conteúdo real e tecnologia escolhida.
@@ -43,7 +44,7 @@ Repositório **público**: não publicar tokens, senhas, dados pessoais, histór
 - [Plano do ecossistema de agentes (PDF)](docs/references/Plano_Ecossistema_Agentes_IA_2026.pdf)
 - [Roadmap de segurança geral v3](docs/security/Roadmap_Seguranca_Geral_v3.md)
 - [Inventário de ferramentas](policies/inventario-ferramentas-integracoes.md) e [matriz de riscos e aprovações](policies/matriz-riscos-permissoes-aprovacoes.md)
-- [Contratos de agente, skill e tarefa](docs/contratos/README.md) (GH-F1.1, rascunho)
+- [Contratos de agente, skill e tarefa](docs/contratos/README.md) (GH-F1.1) e [definições dos agentes](agents/README.md) (GH-F1.2, documentais)
 - Compliance (checklist de 17 itens, mapa de dados, relatório): [docs/compliance/](docs/compliance/README.md)
 - Integridade: [docs/CHECKSUMS.sha256](docs/CHECKSUMS.sha256)
 

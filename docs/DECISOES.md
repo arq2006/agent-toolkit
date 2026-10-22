@@ -28,10 +28,13 @@
 PR #3 integrado na main com autorização explícita de Arthur (commit de merge 62a99c0). Em seguida: inventário de ferramentas e matriz de riscos/permissões/aprovações em `policies/` e plano da arquitetura GH-F1 em [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) (proposta, sem implementação).
 
 ## ADR-009 — Contratos de agente, skill e tarefa
-**Status:** proposta (GH-F1.1). Ver [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) e [contratos/](contratos/README.md).
+**Status:** aceita na integração do PR #5 (GH-F1.1, commit de merge `e32a118`). Ver [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) e [contratos/](contratos/README.md).
 
 ## Marco: GH-F0 concluída (22/10/2026)
 PRs #1, #2, #3 e #4 integrados na main (o #4 em `504156e`, autorização explícita de Arthur específica para esse PR). Documentos originais intactos (checksums OK). Auditoria independente do Codex continua **pendente**.
+
+## Marco: GH-F1.1 concluída (22/10/2026)
+PR #5 integrado na main (`e32a118`) com autorização explícita de Arthur específica para esse PR (commit aprovado `ed522ed`). Em seguida: GH-F1.2, definições documentais dos três agentes em [`agents/`](../agents/README.md), em PR separado (rascunho). Registrado para a GH-F1.3: o alvo da autorização `open_pr` deve usar repositório e branches head/base antes da criação do PR, sem exigir número inexistente. Auditoria independente do Codex continua **pendente**.
 
 ## Decisões da GH-F1 (22/10/2026, Arthur)
 Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonnet com esforço médio por padrão; Codex como auditor independente quando disponível, planejado após a GH-F1.4 e antes da primeira escrita do piloto, sem ser exigido antes da GH-F1.1. **Um auditor Claude em contexto separado não substitui a auditoria independente do Codex.** Merge: autorização humana obrigatória e específica por PR, com execução delegável ao Claude; proteção de branch fica separada e bloqueada sem autorização especial. Sandbox local condicionado, **não criado**: [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md).
@@ -47,7 +50,8 @@ Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no
 - ~~Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases.~~ Tratadas na F0.2 (ADR-006, ADR-007, ADR-008); PR #3 integrado na main (62a99c0).
 - **Auditoria independente (Codex) das F0.1 e F0.2 continua pendente**; não foi realizada. Executar na máquina do Arthur, com autorização.
 - ~~Inventário de ferramentas e matriz de risco/aprovação (GH-F0).~~ Criados em [policies/](../policies/) (PR #4 integrado).
-- ~~GH-F1: formato dos contratos de agente, skill e tarefa.~~ Propostos na GH-F1.1 ([contratos/](contratos/README.md)); aguardam revisão humana.
+- ~~GH-F1: formato dos contratos de agente, skill e tarefa.~~ Integrados na GH-F1.1 ([contratos/](contratos/README.md)).
+- GH-F1.3: alvo da autorização `open_pr` (repositório e branches head/base antes do PR; número depois).
 - GH-F1.3: mecanismo de materialização em `.claude/`, esquema formal e formato do arquivo de tarefa.
 - GH-F2: formato final dos artefatos de compliance e skill `legal-web-check`.
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.

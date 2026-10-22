@@ -61,9 +61,9 @@ Contrato de tarefa (arquivo em `workflows/`, formato final a decidir): `id`, `ow
 
 | PR | Entrega | Tipo | Aceite |
 |---|---|---|---|
-| GH-F1.1 | Contratos de agente, skill e tarefa em ADR + documentos de formato (**em revisão**: [contratos/](../contratos/README.md), [ADR-009](../adr/ADR-009-contratos-de-agente-skill-tarefa.md)) | documental | revisão humana; sem execução |
-| GH-F1.2 | Definições neutras dos 3 agentes em `agents/` (texto, sem automação) | documental | validação do contrato; permissões conforme a matriz |
-| GH-F1.3 | Pesquisa da documentação oficial e decisão de materialização (ADR) + procedimento de dry-run | documental | decisão registrada com fontes e datas |
+| GH-F1.1 | Contratos de agente, skill e tarefa em ADR + documentos de formato (**concluída**: [contratos/](../contratos/README.md), [ADR-009](../adr/ADR-009-contratos-de-agente-skill-tarefa.md)) | documental | revisão humana; sem execução |
+| GH-F1.2 | Definições neutras dos 3 agentes em `agents/` (texto, sem automação) (**em revisão**: [agents/](../../agents/README.md)) | documental | validação do contrato; permissões conforme a matriz |
+| GH-F1.3 | Pesquisa da documentação oficial e decisão de materialização (ADR) + procedimento de dry-run; **também**: corrigir no contrato de tarefa o alvo da autorização `open_pr` (antes do PR, repositório e branches head/base; o número só depois da criação) | documental | decisão registrada com fontes e datas |
 | GH-F1.4 | Materialização em `.claude/` com dry-run, **sem hooks**, em branch própria | configuração | carregamento real verificado e documentado; humano aprova ativação |
 | (Auditoria Codex local) | Auditoria independente na máquina de Arthur, **após a GH-F1.4 e antes da primeira escrita do piloto (GH-F1.6)**; não exigida antes da GH-F1.1 | auditoria | relatório do Codex anexado; se indisponível, registrar como pendente |
 | GH-F1.5 | Piloto read-only: planejador + auditor em paralelo num repositório sandbox descartável | teste | duas evidências agregadas, sem edições, sem commits, sem dados sensíveis |
