@@ -2,9 +2,13 @@
 
 | Documento | Descrição |
 |---|---|
-| [ROADMAP_IMPLEMENTACAO.md](ROADMAP_IMPLEMENTACAO.md) | Roadmap técnico F0–F6 do repositório |
+| [ROADMAP_IMPLEMENTACAO.md](ROADMAP_IMPLEMENTACAO.md) | Roadmap técnico GH-F0 a GH-F6 (referência operacional) |
+| [ARQUITETURA.md](ARQUITETURA.md) | Arquitetura de diretórios alvo e mapa de reconciliação |
 | [DECISOES.md](DECISOES.md) | Registro de decisões arquiteturais (ADR simplificado) |
-| [adr/ADR-006-correspondencia-de-fases.md](adr/ADR-006-correspondencia-de-fases.md) | Correspondência entre as fases F0–F7 do PDF e F0–F6 do roadmap técnico |
+| [adr/ADR-006-correspondencia-de-fases.md](adr/ADR-006-correspondencia-de-fases.md) | Correspondência entre PDF-F0–F7 e GH-F0–F6 |
+| [adr/ADR-007-arquitetura-de-diretorios.md](adr/ADR-007-arquitetura-de-diretorios.md) | Decisão sobre a estrutura de diretórios |
+| [adr/ADR-008-compliance-juridico-separado-do-tecnico.md](adr/ADR-008-compliance-juridico-separado-do-tecnico.md) | Decisão sobre compliance jurídico × auditoria técnica |
+| [compliance/README.md](compliance/README.md) | Compliance: checklist de 17 itens, mapa de dados e relatório por projeto |
 | [FONTES_E_IMPORTACAO.md](FONTES_E_IMPORTACAO.md) | Fontes de referência e regras de importação |
 | [HANDOFF_CLAUDE.md](HANDOFF_CLAUDE.md) | Instruções de início para o Claude Code |
 | [references/Plano_Ecossistema_Agentes_IA_2026.pdf](references/Plano_Ecossistema_Agentes_IA_2026.pdf) | Plano original (PDF, 17 páginas), preservado sem alterações |
