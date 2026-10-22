@@ -1,6 +1,6 @@
 # ADR-010 — Materialização das definições em `.claude/`
 
-**Status:** proposta (GH-F1.3, 22/10/2026; aguarda revisão humana). Nenhuma materialização é feita por esta ADR.
+**Status:** aceita (proposta na GH-F1.3; revisada por Arthur e integrada no PR #7, 22/10/2026). A aplicação inicial está em [materializacao-claude-code.md](../materializacao-claude-code.md) (GH-F1.4).
 
 ## Contexto
 A [ADR-007](ADR-007-arquitetura-de-diretorios.md) definiu a fonte neutra em `agents/` e `skills/` e deixou aberto o mecanismo de materialização em `.claude/`. A [pesquisa](../pesquisas/claude-code-materializacao-2026-10-22.md) mostra que o Claude Code exige `name` e `description` no arquivo de agente, ignora campos desconhecidos, lê skills por symlink de diretório e trata CLAUDE.md como contexto, não como controle imposto.
