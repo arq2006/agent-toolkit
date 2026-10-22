@@ -62,12 +62,13 @@ Contrato de tarefa (arquivo em `workflows/`, formato final a decidir): `id`, `ow
 | PR | Entrega | Tipo | Aceite |
 |---|---|---|---|
 | GH-F1.1 | Contratos de agente, skill e tarefa em ADR + documentos de formato (**concluída**: [contratos/](../contratos/README.md), [ADR-009](../adr/ADR-009-contratos-de-agente-skill-tarefa.md)) | documental | revisão humana; sem execução |
-| GH-F1.2 | Definições neutras dos 3 agentes em `agents/` (texto, sem automação) (**em revisão**: [agents/](../../agents/README.md)) | documental | validação do contrato; permissões conforme a matriz |
-| GH-F1.3 | Pesquisa da documentação oficial e decisão de materialização (ADR) + procedimento de dry-run; **também**: corrigir no contrato de tarefa o alvo da autorização `open_pr` (antes do PR, repositório e branches head/base; o número só depois da criação) | documental | decisão registrada com fontes e datas |
-| GH-F1.4 | Materialização em `.claude/` com dry-run, **sem hooks**, em branch própria | configuração | carregamento real verificado e documentado; humano aprova ativação |
+| GH-F1.2 | Definições neutras dos 3 agentes em `agents/` (texto, sem automação) (**concluída**: [agents/](../../agents/README.md)) | documental | validação do contrato; permissões conforme a matriz |
+| GH-F1.3 | Pesquisa da documentação oficial e decisão de materialização (ADR) + procedimento de dry-run; correção do alvo `open_pr` e do critério de estado Git do `planner`; estudo da GH-F1.7. **Em revisão**: [pesquisa](../pesquisas/claude-code-materializacao-2026-10-22.md), [ADR-010](../adr/ADR-010-materializacao-em-claude-code.md) (proposta), contrato de tarefa 0.1.1 | documental | decisão registrada com fontes e datas |
+| GH-F1.4 | Materialização em `.claude/` com dry-run, **sem hooks**, em branch própria; **requisito:** agentes sem `Bash` recebem o estado Git inicial e final por mecanismo seguro de preflight, sem permissões adicionais de escrita ([ADR-010](../adr/ADR-010-materializacao-em-claude-code.md)) | configuração | carregamento real verificado e documentado; humano aprova ativação |
 | (Auditoria Codex local) | Auditoria independente na máquina de Arthur, **após a GH-F1.4 e antes da primeira escrita do piloto (GH-F1.6)**; não exigida antes da GH-F1.1 | auditoria | relatório do Codex anexado; se indisponível, registrar como pendente |
 | GH-F1.5 | Piloto read-only: planejador + auditor em paralelo num repositório sandbox descartável | teste | duas evidências agregadas, sem edições, sem commits, sem dados sensíveis |
 | GH-F1.6 | Implementador em worktree exclusiva no sandbox; colisão proposital de arquivo | teste | parada correta na colisão; sem push autônomo |
+| GH-F1.7 (**futura, não aprovada**) | Orquestração hierárquica e biblioteca de 12 agentes especializados: ver [GH-F1-7-orquestracao-hierarquica.md](GH-F1-7-orquestracao-hierarquica.md) | estudo | só estudo de viabilidade na GH-F1.3; implementação exige aprovação própria, após a F1.6 e a auditoria local do Codex |
 
 Cada PR: branch própria a partir da `main` atualizada, commits pequenos, rascunho, sem merge automático, relatório com testes e riscos. O sandbox (GH-F1.5/F1.6) segue as condições aprovadas em [sandbox-gh-f1.md](sandbox-gh-f1.md). A aprovação da divisão **não** autoriza merge automático dos PRs seguintes: cada integração exige autorização humana para aquele PR.
 

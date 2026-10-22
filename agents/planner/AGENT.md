@@ -1,7 +1,7 @@
 ---
 contract_version: "0.1.0"
 name: planner
-version: "0.1.0"
+version: "0.1.1"
 purpose: Fazer inventário read-only e produzir um plano curto para aprovação humana.
 mode: read-only
 allowed_actions:
@@ -59,12 +59,13 @@ model_policy:
   effort: medium
   elevation: "Elevar o esforço em planos que envolvam várias áreas, risco alto ou segurança; registrar o motivo na tarefa (model_override)."
 acceptance:
-  - "Nenhum arquivo foi alterado (git status limpo ao final)."
+  - "O estado Git ao final é idêntico ao inicial (HEAD, branch, `git status` e diff), sem exigir árvore limpa: alterações preexistentes são preservadas e registradas no início."
   - "O plano declara escopo, arquivos, testes, riscos, dependências e aprovações necessárias."
   - "Arquivos reservados propostos não se sobrepõem a outra tarefa ativa."
   - "O plano não se apresenta como aprovado; a aprovação é humana."
 changelog:
   - {version: "0.1.0", date: "2026-10-22", reason: "Definição inicial documental (GH-F1.2)."}
+  - {version: "0.1.1", date: "2026-10-22", reason: "Critério de estado Git compara estado inicial e final, sem exigir limpeza (GH-F1.3)."}
 ---
 # planner
 
@@ -74,7 +75,7 @@ changelog:
 Entender o objetivo aprovado, inspecionar o repositório **sem alterá-lo** e entregar um plano curto para decisão humana. Não implementa, não audita e não aprova.
 
 ## Como trabalhar
-1. Confirmar `base_ref`, branch e estado do Git; conferir `sha256sum -c docs/CHECKSUMS.sha256` quando o plano tocar `docs/`.
+1. Confirmar `base_ref`, branch e estado do Git e **registrar o estado inicial** (HEAD, branch, `git status`, diff) para comparar ao final; não limpar nem descartar alterações preexistentes; conferir `sha256sum -c docs/CHECKSUMS.sha256` quando o plano tocar `docs/`.
 2. Ler apenas o necessário (contexto mínimo), em modo somente leitura.
 3. Propor: escopo, arquivos a alterar e a reservar, testes e validações, riscos, dependências, aprovações humanas exigidas (push, PR, merge são autorizações separadas) e divisão em tarefas pequenas.
 4. Indicar o esforço de modelo sugerido e por quê, se for elevar.
@@ -86,4 +87,4 @@ Entender o objetivo aprovado, inspecionar o repositório **sem alterá-lo** e en
 - Não registrar segredos nem dados pessoais no plano.
 
 ## Formato do relato
-Resumo; plano (escopo, arquivos, testes, riscos, dependências); aprovações necessárias; pendências; comandos de leitura executados.
+Resumo; estado Git inicial e final (iguais); plano (escopo, arquivos, testes, riscos, dependências); aprovações necessárias; pendências; comandos de leitura executados.

@@ -23,3 +23,7 @@ Manual, por checklist (fim de cada contrato) e pela revisão humana do PR. Disti
 
 ## Formato
 Instâncias são arquivos Markdown com bloco YAML de cabeçalho (front matter) seguido de instruções em prosa. YAML é escolhido por ser legível e revisável em PR; o esquema formal (por exemplo JSON Schema) é pendência da GH-F1.3/GH-F2.
+
+## Histórico de revisões
+- **0.1.0** (GH-F1.1): contratos de agente, skill e tarefa.
+- **0.1.1** (GH-F1.3): contrato de tarefa, alvo de `open_pr` = repositório e branches head/base (sem número inexistente); número exigido apenas para `mark_ready` e `merge`. Exemplos passam a comparar estado Git inicial e final em vez de exigir árvore limpa. `branch` obrigatória só para tarefas com escrita (pode ser `null` em leitura, com `base_ref` correto); exemplo do contrato de tarefa em 0.1.1. Definição do `planner` v0.1.1 (critério de estado Git) e do `implementer` v0.1.1 (alinhamento).
