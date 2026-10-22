@@ -2,6 +2,8 @@
 
 Status: **preparado; NÃO executado.** O sandbox `~/Projetos/agent-toolkit-sandbox` fica na máquina de Arthur e **não foi criado**: em 22/10/2026 o caminho não aparece na listagem de `~/Projetos` (somente nomes; nada foi lido nem alterado) e esta sessão de nuvem não tem acesso aprovado a essa pasta. O piloto **não** pode ser feito em outro lugar. Condições: [sandbox-gh-f1.md](../plans/sandbox-gh-f1.md); materialização: [materializacao-claude-code.md](../materializacao-claude-code.md).
 
+Roteiros de ambiente isolado por sistema (propostas, não executadas): [Arch Linux](../setup/arch-linux.md), [Windows](../setup/windows.md) e [compatibilidade](../setup/compatibilidade-multiplataforma.md). O sandbox Linux na home da conta dedicada é **proposta pendente de aprovação**; este protocolo mantém o caminho aprovado até lá.
+
 ## Pré-requisitos (todos obrigatórios)
 1. Acesso à máquina de Arthur aprovado por ele (sessão local ou pasta aprovada), limitado ao caminho do sandbox.
 2. Verificar que `~/Projetos/agent-toolkit-sandbox` **não existe ou está vazio**; se tiver qualquer arquivo, parar e relatar.
