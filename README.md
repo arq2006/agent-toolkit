@@ -15,7 +15,7 @@ Ecossistema reutilizável de agentes de IA, skills, ferramentas e fluxos de trab
 
 ## Começar
 
-1. Consulte [docs/ROADMAP_IMPLEMENTACAO.md](docs/ROADMAP_IMPLEMENTACAO.md).
+1. Consulte o [índice da documentação](docs/README.md) e o [docs/ROADMAP_IMPLEMENTACAO.md](docs/ROADMAP_IMPLEMENTACAO.md).
 2. Leia [CLAUDE.md](CLAUDE.md) e [AGENTS.md](AGENTS.md).
 3. Confira [docs/FONTES_E_IMPORTACAO.md](docs/FONTES_E_IMPORTACAO.md) antes de alterar os documentos de referência.
 4. Use [docs/HANDOFF_CLAUDE.md](docs/HANDOFF_CLAUDE.md) para iniciar o trabalho no Claude Code.
@@ -35,6 +35,12 @@ As pastas de código e de agentes serão implementadas pelo Claude após a fase 
 ## Segurança
 
 Repositório **público**: não publicar tokens, senhas, dados pessoais, históricos de conversas, dumps, arquivos .env reais, logs sensíveis nem cópias de configurações locais. Uma aprovação humana é necessária para integrações externas, alterações em produção, pagamentos, ações no computador e merge.
+
+## Documentos de referência
+
+- [Plano do ecossistema de agentes (PDF)](docs/references/Plano_Ecossistema_Agentes_IA_2026.pdf)
+- [Roadmap de segurança geral v3](docs/security/Roadmap_Seguranca_Geral_v3.md)
+- Integridade: [docs/CHECKSUMS.sha256](docs/CHECKSUMS.sha256)
 
 ## Documentação oficial
 
