@@ -22,5 +22,6 @@
 - Linguagem e runtime preferidos para ferramentas próprias.
 - Formato do contrato de tarefas e mecanismo de armazenamento do catálogo.
 - Política de custos e seleção de modelos.
-- Importação e validação dos dois documentos completos de origem.
+- ~~Importação e validação dos dois documentos completos de origem.~~ Concluída na F0.1 (PR #2), com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256); aguardando merge.
+- Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases (F0.2; ver ADR-006).
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.
