@@ -2,7 +2,7 @@
 
 Ecossistema reutilizável de agentes de IA, skills, ferramentas e fluxos de trabalho para diferentes projetos.
 
-> Estado atual: **GH-F0, GH-F1.1 e GH-F1.2 concluídas; GH-F1.3 (pesquisa de materialização e correções de contrato) em revisão**. Fases: GH-F0 a GH-F6 (ver [roadmap](docs/ROADMAP_IMPLEMENTACAO.md)). Nenhum agente autônomo, integração externa ou rotina de execução está habilitado por este repositório.
+> Estado atual: **GH-F0 a GH-F1.3 concluídas; GH-F1.4 (materialização de planner e auditor em `.claude/agents/`) em revisão**. Fases: GH-F0 a GH-F6 (ver [roadmap](docs/ROADMAP_IMPLEMENTACAO.md)). Nenhum agente autônomo, integração externa ou rotina de execução está habilitado por este repositório.
 
 ## Objetivos
 

@@ -10,6 +10,7 @@
 | [adr/ADR-008-compliance-juridico-separado-do-tecnico.md](adr/ADR-008-compliance-juridico-separado-do-tecnico.md) | Decisão sobre compliance jurídico × auditoria técnica |
 | [compliance/README.md](compliance/README.md) | Compliance: checklist de 17 itens, mapa de dados e relatório por projeto |
 | [contratos/README.md](contratos/README.md) | Contratos de agente, skill e tarefa (GH-F1.1, integrados) |
+| [materializacao-claude-code.md](materializacao-claude-code.md) | Procedimento e evidências da materialização em `.claude/agents/` (GH-F1.4) |
 | [pesquisas/claude-code-materializacao-2026-10-22.md](pesquisas/claude-code-materializacao-2026-10-22.md) | Pesquisa da documentação do Claude Code (GH-F1.3) |
 | [adr/ADR-010-materializacao-em-claude-code.md](adr/ADR-010-materializacao-em-claude-code.md) | Proposta de materialização em `.claude/` |
 | [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md) | Estudo da futura GH-F1.7 (orquestrador e 12 especialistas), não aprovada |

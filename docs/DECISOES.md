@@ -57,7 +57,7 @@ Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no
 - **Auditoria independente (Codex) das F0.1 e F0.2 continua pendente**; não foi realizada. Executar na máquina do Arthur, com autorização.
 - ~~Inventário de ferramentas e matriz de risco/aprovação (GH-F0).~~ Criados em [policies/](../policies/) (PR #4 integrado).
 - ~~GH-F1: formato dos contratos de agente, skill e tarefa.~~ Integrados na GH-F1.1 ([contratos/](contratos/README.md)).
-- GH-F1.3: alvo da autorização `open_pr` (repositório e branches head/base antes do PR; número depois).
-- GH-F1.3: mecanismo de materialização em `.claude/`, esquema formal e formato do arquivo de tarefa.
+- ~~GH-F1.3: alvo de `open_pr` e mecanismo de materialização.~~ Resolvidos na GH-F1.3 ([ADR-010](adr/ADR-010-materializacao-em-claude-code.md), PR #7 integrado).
+- GH-F1.4 (em revisão): `implementer` em `.claude/agents/` não gravado (aguarda autorização); `@AGENTS.md` no `CLAUDE.md` aguarda decisão; esquema formal e formato do arquivo de tarefa seguem em aberto. Ver [materializacao-claude-code.md](materializacao-claude-code.md).
 - GH-F2: formato final dos artefatos de compliance e skill `legal-web-check`.
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.

@@ -1,0 +1,37 @@
+# Mapeamento neutro -> Claude Code (GH-F1.4, ADR-010). Fonte: agents/<nome>/AGENT.md.
+# Campos exigidos pelo Claude Code que o contrato neutro não tem (description) e
+# controle de ferramentas ficam aqui, revisados por humano. Não conceder Bash a agentes de leitura.
+mapping_version: "0.1.0"
+agents:
+  planner:
+    description: >-
+      Planejador somente leitura. Use para inventariar o repositório e produzir um plano curto
+      (escopo, arquivos, testes, riscos, aprovações) para decisão humana. Não edita arquivos
+      nem executa comandos; recebe o estado Git inicial e final por preflight do invocador.
+    tools: [Read, Grep, Glob]
+    disallowedTools: [Bash, Write, Edit, NotebookEdit, Agent, WebFetch, WebSearch]
+    model: sonnet
+    effort: medium
+    materialize: true
+  auditor:
+    description: >-
+      Auditor somente leitura. Use para revisar um diff contra as regras do repositório e relatar
+      achados P0 a P3 com evidência. Não corrige nem executa comandos; não substitui a auditoria
+      independente do Codex.
+    tools: [Read, Grep, Glob]
+    disallowedTools: [Bash, Write, Edit, NotebookEdit, Agent, WebFetch, WebSearch]
+    model: sonnet
+    effort: medium
+    materialize: true
+  implementer:
+    description: >-
+      Implementador com escrita restrita. Use somente para tarefa com status aprovada, em branch
+      e worktree próprias, alterando apenas arquivos reservados. Push, PR e merge exigem
+      autorização específica por ação.
+    tools: [Read, Grep, Glob, Edit, Write, Bash]
+    disallowedTools: [Agent, WebFetch, WebSearch, NotebookEdit]
+    model: sonnet
+    effort: medium
+    isolation: worktree
+    # Contém ferramentas de escrita: só é gravado em .claude/agents após autorização específica.
+    materialize: false
