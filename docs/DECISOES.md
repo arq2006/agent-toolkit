@@ -27,6 +27,9 @@
 ## Marco: GH-F0.2 concluída (22/10/2026)
 PR #3 integrado na main com autorização explícita de Arthur (commit de merge 62a99c0). Em seguida: inventário de ferramentas e matriz de riscos/permissões/aprovações em `policies/` e plano da arquitetura GH-F1 em [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) (proposta, sem implementação).
 
+## Decisões da GH-F1 (22/10/2026, Arthur)
+Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonnet com esforço médio por padrão; Codex como auditor independente quando disponível, planejado após a GH-F1.4 e antes da primeira escrita do piloto, sem ser exigido antes da GH-F1.1. **Um auditor Claude em contexto separado não substitui a auditoria independente do Codex.** Merge: autorização humana obrigatória e específica por PR, com execução delegável ao Claude; proteção de branch fica separada e bloqueada sem autorização especial. Sandbox local condicionado, **não criado**: [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md).
+
 ## Registro de auditoria independente
 Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 

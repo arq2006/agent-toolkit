@@ -14,7 +14,7 @@ Status: **documento de política (GH-F0, origem PDF-F0)**, criado em 22/10/2026.
 | ID | Ferramenta | Uso previsto | Estado | Fase | Acesso mínimo | Observações |
 |---|---|---|---|---|---|---|
 | T-01 | Git (local) | Branches, commits, worktrees | uso na sessão | GH-F0+ | repositório local | stage por caminho explícito; sem `reset --hard`, `clean`, force push |
-| T-02 | GitHub (repo `agent-toolkit`, público) e integração via ferramentas MCP da sessão | PRs em rascunho, leitura de estado | uso na sessão | GH-F0+ | somente este repositório | sem merge automático; merge só com autorização humana explícita; não alterar proteção de branch |
+| T-02 | GitHub (repo `agent-toolkit`, público) e integração via ferramentas MCP da sessão | PRs em rascunho, leitura de estado | uso na sessão | GH-F0+ | somente este repositório | sem merge automático; merge só com autorização humana explícita para o PR específico (execução pode ser delegada ao Claude); proteção de branch e configurações do repositório bloqueadas sem autorização especial |
 | T-03 | GitHub Actions / CI | Validações de documentação e contratos | candidata | GH-F1+ | escopo do repositório | só com aprovação; sem segredos; permissões mínimas do workflow |
 | T-04 | Varredura de segredos e dependências | Detectar segredos e riscos de supply chain | candidata | GH-F1/F2 | leitura | escolher ferramenta após revisão de proveniência; sem instalação silenciosa |
 
@@ -22,13 +22,13 @@ Status: **documento de política (GH-F0, origem PDF-F0)**, criado em 22/10/2026.
 
 | ID | Ferramenta | Uso previsto | Estado | Fase | Acesso mínimo | Observações |
 |---|---|---|---|---|---|---|
-| T-10 | Claude Code (CLI/web) | Implementação e planejamento | uso na sessão | GH-F0+ | repositório autorizado | implementador; conferir documentação oficial atual antes de usar recursos novos |
+| T-10 | Claude Code (CLI/web), modelo Sonnet com esforço médio por padrão | Implementação e planejamento | uso na sessão | GH-F0+ | repositório autorizado | implementador; conferir documentação oficial atual antes de usar recursos novos |
 | T-11 | Subagents do Claude Code | Papéis especializados com contexto próprio | candidata | GH-F1 | leitura no piloto | contexto separado **não** é isolamento de arquivos |
 | T-12 | Skills (padrão Agent Skills, `SKILL.md`) | Procedimentos reutilizáveis | candidata | GH-F2 | leitura/escrita conforme skill | skills de terceiros: revisão de procedência e permissões |
 | T-13 | Hooks do Claude Code | Bloquear ou automatizar etapas | bloqueada (não ativar) | GH-F1 (desenho) | — | ativação exige avaliação e autorização; começam como proposta documental |
 | T-14 | Agent Teams (experimental) | Sessões paralelas coordenadas | bloqueada | pós GH-F1 | — | não ativar por padrão; sem garantia de isolamento de arquivos |
 | T-15 | Git worktrees | Isolamento de escrita paralela | candidata | GH-F1 | checkout local | uma worktree por agente com escrita |
-| T-16 | Codex (OpenAI) como auditor independente | Revisão read-only independente | candidata; **indisponível no ambiente de nuvem; auditoria pendente** | GH-F1+ | leitura | rodar na máquina de Arthur com autorização; nunca apresentar como concluída sem execução real |
+| T-16 | Codex (OpenAI) como auditor independente | Revisão read-only independente | candidata; **indisponível no ambiente de nuvem; auditoria pendente** | GH-F1+ | leitura | rodar na máquina de Arthur com autorização; nunca apresentar como concluída sem execução real; auditor Claude em contexto separado não o substitui. Auditoria local planejada após a GH-F1.4 e antes da primeira escrita do piloto (GH-F1.6) |
 | T-17 | Hermes Agent (Nous Research) | Assistente pessoal, voz, rotinas | experimental/bloqueada | GH-F4 | VM ou container isolado | licença e proveniência a verificar; instalador deve ser baixado, inspecionado e só então executado; nunca `approvals.mode: off`; sem acesso irrestrito ao computador |
 
 ## Integrações e provedores externos
