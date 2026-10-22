@@ -12,7 +12,8 @@ A [ADR-007](ADR-007-arquitetura-de-diretorios.md) definiu a fonte neutra em `age
 4. **Isolamento do implementador:** worktree (`isolation: worktree` ou worktree manual), reserva de arquivos e regras `deny` para caminhos protegidos (`docs/references/`, `docs/security/`, `docs/CHECKSUMS.sha256`); sandbox e hooks só após avaliação e aprovação próprias.
 5. **Instruções:** avaliar `@AGENTS.md` dentro do `CLAUDE.md` (hoje o `AGENTS.md` não é carregado automaticamente porque existe `CLAUDE.md`).
 6. **Agent Teams** permanecem desligados; **MCP e hooks** não são introduzidos na materialização inicial.
-7. **Verificação de carregamento** (GH-F1.4): conferir a versão instalada e comprovar na prática que cada agente carrega, que o read-only recusa escrita e que as permissões efetivas são as esperadas; prompts sozinhos não comprovam isolamento.
+7. **Estado Git sem Bash (requisito da GH-F1.4):** agentes sem `Bash` (por exemplo `planner` e `auditor` restritos a `Read`, `Grep`, `Glob`) devem receber o **estado Git inicial e final** (HEAD, branch, `git status`, diff) por um **mecanismo seguro de preflight**, executado fora do agente (pelo Claude principal ou pelo humano) e entregue como dado, **sem conceder ao agente permissões adicionais de escrita** nem `Bash` amplo. O mecanismo exato é decidido e testado na GH-F1.4.
+8. **Verificação de carregamento** (GH-F1.4): conferir a versão instalada e comprovar na prática que cada agente carrega, que o read-only recusa escrita e que as permissões efetivas são as esperadas; prompts sozinhos não comprovam isolamento.
 
 ## Alternativas
 - Fonte direta em `.claude/agents/`: simples, mas acopla à ferramenta (rejeitada na ADR-007; reavaliar só se a tradução se mostrar custosa).

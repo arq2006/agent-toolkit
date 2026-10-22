@@ -14,7 +14,7 @@ Versão do contrato: 0.1.1 (revisão da GH-F1.3: alvo de `open_pr` e critério d
 | `phase` | sim | fase com prefixo (ex.: `GH-F1.1`) |
 | `owner` | sim | agente responsável e papel |
 | `base_ref` | sim | branch e commit-base verificados |
-| `branch` | sim | branch própria, nome em inglês |
+| `branch` | sim para escrita | **Obrigatória em tarefas com escrita** (`write-scoped`): branch própria, nome em inglês. **Pode ser `null` em tarefas somente de leitura** (`read-only`), desde que `base_ref` (branch e commit) identifique corretamente o estado analisado |
 | `worktree` | escrita | caminho da worktree isolada, quando houver escrita paralela ou em piloto |
 | `files_reserved` | escrita | arquivos/diretórios com escrita exclusiva; nunca sobrepostos entre tarefas ativas |
 | `files_forbidden` | sim | inclui os protegidos (`docs/references/`, `docs/security/`, `docs/CHECKSUMS.sha256`) |
@@ -55,7 +55,7 @@ Regras: uma autorização vale **só** para a ação e o alvo registrados; `mark
 
 ## Regras
 1. **Reserva exclusiva:** duas tarefas com escrita nunca reservam o mesmo arquivo; colisão interrompe a execução e é relatada.
-2. **Preflight obrigatório:** conferir branch, HEAD e estado do Git; checksums dos documentos importados; escopo contra a reserva.
+2. **Preflight obrigatório:** conferir branch, HEAD e estado do Git (em tarefa de leitura com `branch: null`, o `base_ref` com commit identifica o estado analisado); checksums dos documentos importados; escopo contra a reserva.
 3. **Aprovação não se herda:** a aprovação de uma tarefa não cobre outra, nem outra fase, nem push, PR ou merge (cada um tem autorização própria), nem merge de PR diferente.
 4. **Relato padronizado:** todo término entrega arquivos tocados, testes, riscos, pendências e evidências; sem isso a tarefa não vai a `em_revisao_humana`.
 5. **Merge:** só com autorização humana específica para o PR (item em `action_authorizations`); a execução pode ser delegada ao Claude conforme a matriz. Proteção de branch fica fora de qualquer tarefa comum.
@@ -64,7 +64,7 @@ Regras: uma autorização vale **só** para a ação e o alvo registrados; `mark
 ## Exemplo ilustrativo (fictício)
 
 ```yaml
-contract_version: 0.1.0
+contract_version: 0.1.1
 id: TASK-EXEMPLO-001
 title: Resumir estrutura de repositório descartável
 objective: Produzir resumo da estrutura sem alterar arquivos.
