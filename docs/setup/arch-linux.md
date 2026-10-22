@@ -31,13 +31,20 @@ command -v bwrap socat podman docker nft      # informativo
 Pacotes (Arch): `git`, `python`, `python-yaml`; opcionais `bubblewrap`, `socat`. **Instalar qualquer um [REQUER AUTORIZAÇÃO].** O instalador oficial do Claude Code é um comando remoto (`curl … | bash`): revise o script antes ou use o método que você aprovar.
 
 ### Passo 1 — conta dedicada sem sudo [REQUER AUTORIZAÇÃO; você executa como administrador]
+Antes de qualquer comando administrativo o bloco prova que **nada existe** no caminho: sem conta, sem grupo, sem diretório, sem link simbólico (nem pendente) e com `/home` real. Se algo existir, o bloco **para sem alterar nada** (nenhum `useradd` roda sobre um caminho preexistente).
 ```
 ( set -euo pipefail
-  if id agent-pilot >/dev/null 2>&1; then echo "PARAR: agent-pilot já existe"; exit 1; fi
-  sudo useradd --create-home --home-dir /home/agent-pilot --user-group --shell /bin/bash agent-pilot
+  H=/home/agent-pilot
+  if getent passwd agent-pilot >/dev/null; then echo "PARAR: usuário agent-pilot já existe"; exit 1; fi
+  if getent group agent-pilot >/dev/null; then echo "PARAR: grupo agent-pilot já existe"; exit 1; fi
+  if [ -e "$H" ] || [ -L "$H" ]; then echo "PARAR: $H já existe (diretório, arquivo ou link simbólico)"; exit 1; fi
+  if [ -L /home ] || [ "$(realpath -e /home)" != /home ]; then echo "PARAR: /home não é um diretório real"; exit 1; fi
+  sudo useradd --create-home --home-dir "$H" --user-group --shell /bin/bash agent-pilot
+  if [ -L "$H" ] || [ "$(realpath -e "$H")" != "$H" ]; then echo "PARAR: $H inesperado após criação"; exit 1; fi
+  test "$(stat -c %U "$H")" = agent-pilot
   sudo passwd -l agent-pilot
-  sudo chmod 700 /home/agent-pilot
-  test "$(stat -c %a /home/agent-pilot)" = 700
+  sudo chmod 700 "$H"
+  test "$(stat -c %a "$H")" = 700
   test "$(id -nG agent-pilot)" = agent-pilot      # nenhum grupo além do próprio
   echo "OK passo 1" )
 ```
@@ -57,23 +64,27 @@ Não adicionar a `wheel`, `docker`, `libvirt`, `disk`, `kvm` ou qualquer grupo e
 O canário é legível (644); o que o protege é a permissão da sua home. Remova-o manualmente depois, por decisão sua.
 
 ### Passo 3 — testes de acesso (como `agent-pilot`; **obrigatórios**; o canário do passo 2 já deve existir)
-Ajuste `OWNER` para o seu login. O passo falha se qualquer acesso indevido existir.
+Ajuste `OWNER` para o seu login. As checagens são **direcionadas** e usam só `test -r/-x` (permissão de acesso): **nenhuma varredura de `/`, nenhuma listagem nem leitura de conteúdo** da sua home ou dos seus projetos. O passo falha se qualquer acesso indevido existir.
 ```
 ( set -uo pipefail
   OWNER=<sua-conta>; fail=0
   alerta() { echo "ALERTA: $1"; fail=1; }
   [ "$(id -un)" = agent-pilot ] || alerta "não está como agent-pilot"
-  id -nG | tr ' ' '\n' | grep -Eqx 'wheel|sudo|docker|libvirt|disk|adm|root|kvm|video|systemd-journal' && alerta "grupo privilegiado"
+  id -nG | tr ' ' '\n' | grep -Eqx 'wheel|sudo|docker|libvirt|disk|adm|root|kvm|systemd-journal' && alerta "grupo privilegiado"
   sudo -n true >/dev/null 2>&1 && alerta "sudo sem senha funciona"
-  ls "/home/$OWNER" >/dev/null 2>&1 && alerta "lista a home de $OWNER"
-  cat "/home/$OWNER/agent-pilot-canary/canary.txt" >/dev/null 2>&1 && alerta "lê o canário"
-  for d in /home/*; do [ "$d" = "$HOME" ] || { ls "$d" >/dev/null 2>&1 && alerta "lista $d"; }; done
-  [ -r /var/run/docker.sock ] && alerta "socket do docker legível"
-  [ -n "$(find / -user "$OWNER" -readable -not -path '/proc/*' -not -path '/sys/*' -print -quit 2>/dev/null)" ] && alerta "arquivo de $OWNER legível"
-  for m in /mnt /media /run/media /srv /opt; do for d in "$m"/*; do [ -e "$d" ] && ls "$d" >/dev/null 2>&1 && echo "REVISAR manualmente (legível): $d"; done; done
+  # sua home e caminhos sensíveis: apenas teste de permissão
+  for p in "/home/$OWNER" "/home/$OWNER/Projetos" "/home/$OWNER/.ssh" "/home/$OWNER/.config" "/home/$OWNER/.claude" "/home/$OWNER/agent-pilot-canary" "/home/$OWNER/agent-pilot-canary/canary.txt"; do
+    { [ -r "$p" ] || [ -x "$p" ]; } && alerta "acessível: $p"
+  done
+  # demais homes
+  for d in /home/*; do [ "$d" = "$HOME" ] || { { [ -r "$d" ] || [ -x "$d" ]; } && alerta "acessível: $d"; }; done
+  # socket do Docker
+  for s in /var/run/docker.sock /run/docker.sock; do { [ -r "$s" ] || [ -w "$s" ]; } && alerta "socket do docker acessível: $s"; done
+  # montagens reais (exceto "/"): só reporta as que a conta consegue atravessar
+  while read -r m; do [ "$m" = / ] && continue; { [ -r "$m" ] && [ -x "$m" ]; } && echo "REVISAR manualmente (montagem acessível): $m"; done < <(findmnt -rn --real -o TARGET)
   [ "$fail" = 0 ] && echo "OK passo 3" || { echo "PARAR (passo 3)"; exit 1; } )
 ```
-**Condições de parada:** `sudo` funciona; grupo privilegiado; canário ou arquivo seu legível; outra home legível; socket do Docker legível; qualquer montagem com seus projetos (Solenne, Velaris, FIINA etc.) legível. As linhas `REVISAR` precisam de decisão sua antes de seguir. Parar, relatar e **não** prosseguir.
+**Condições de parada:** `sudo` funciona; grupo privilegiado; qualquer caminho seu acessível (home, projetos, `.ssh`, `.config`, `.claude`, canário); outra home acessível; socket do Docker acessível. As linhas `REVISAR` (montagens acessíveis, por exemplo discos de dados) exigem decisão sua **antes** de seguir; o teste não olha dentro delas. Se o dono do projeto Solenne, Velaris ou FIINA estiver em montagem acessível, parar. Parar, relatar e **não** prosseguir.
 
 ### Passo 4 — diretório de evidências e clone do toolkit (como `agent-pilot`) [REQUER AUTORIZAÇÃO]
 ```
@@ -89,15 +100,24 @@ Se o clone já existir, parar. Para o piloto, use o commit da `main` que você a
 O conteúdo vem de [examples/sandbox-fixture/](../../examples/sandbox-fixture/): README, `CLAUDE.md`, `AGENTS.md`, política de permissões, arquitetura, documentos "protegidos" com `CHECKSUMS.sha256`, tarefa de exemplo, um módulo pequeno e testes. É tudo **fictício** (nada de projetos reais) e coerente com as referências usadas por `planner` e `auditor` (`../../CLAUDE.md`, `../../AGENTS.md`, `../../policies/matriz-riscos-permissoes-aprovacoes.md`, `../../docs/security/Roadmap_Seguranca_Geral_v3.md`, `sha256sum -c docs/CHECKSUMS.sha256`).
 
 ### Passo 5 — criar o repositório (como `agent-pilot`)
+O bloco exige que `HOME` seja exatamente `/home/agent-pilot` e real, rejeita link simbólico no clone, no sandbox e na origem fictícia, e confirma que o destino real do sandbox é **exatamente** `/home/agent-pilot/agent-toolkit-sandbox`, antes e depois de criar. Nada é gravado por link para outro diretório.
 ```
 ( set -euo pipefail
-  TK=/home/agent-pilot/agent-toolkit; SB=/home/agent-pilot/agent-toolkit-sandbox
+  H=/home/agent-pilot; TK=$H/agent-toolkit; SB=$H/agent-toolkit-sandbox
   [ "$(id -un)" = agent-pilot ] || { echo "PARAR: usuário errado"; exit 1; }
-  if [ -e "$SB" ] && [ -n "$(ls -A "$SB")" ]; then echo "PARAR: caminho existe e não está vazio"; exit 1; fi
+  [ "$HOME" = "$H" ] && [ ! -L "$H" ] && [ "$(realpath -e "$H")" = "$H" ] || { echo "PARAR: HOME inesperado"; exit 1; }
+  [ -d "$TK" ] && [ ! -L "$TK" ] && [ "$(realpath -e "$TK")" = "$TK" ] || { echo "PARAR: clone do toolkit ausente ou com link"; exit 1; }
+  if [ -L "$SB" ]; then echo "PARAR: $SB é link simbólico"; exit 1; fi
+  if [ -e "$SB" ]; then
+    [ -d "$SB" ] && [ -z "$(ls -A "$SB")" ] || { echo "PARAR: caminho existe e não está vazio"; exit 1; }
+  fi
+  if [ -n "$(find "$TK/examples/sandbox-fixture" "$TK/.claude/agents" -type l -print -quit)" ]; then echo "PARAR: link simbólico na origem"; exit 1; fi
   mkdir -p "$SB"
+  [ ! -L "$SB" ] && [ "$(realpath -e "$SB")" = "$H/agent-toolkit-sandbox" ] || { echo "PARAR: destino real do sandbox inesperado"; exit 1; }
   cp -R "$TK/examples/sandbox-fixture/." "$SB/"
   mkdir -p "$SB/.claude/agents"
   cp "$TK/.claude/agents/planner.md" "$TK/.claude/agents/auditor.md" "$SB/.claude/agents/"     # implementer NÃO é copiado
+  if [ -n "$(find "$SB" -type l -print -quit)" ]; then echo "PARAR: link simbólico dentro do sandbox"; exit 1; fi
   cd "$SB" && git init -q -b main-ficticia
   git add -A
   git -c user.name=pilot -c user.email=pilot@example.invalid commit -q -m "fictional sandbox baseline"
