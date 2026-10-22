@@ -1,0 +1,53 @@
+# Segredos e ambientes locais
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.p8
+*.jks
+*.kdbx
+*.asc
+*.age
+.secrets/
+secrets/
+private/
+personal-data/
+credentials/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Claude e outros agentes — estado local
+.claude/settings.local.json
+.claude/projects/
+.claude/tasks/
+.codex/
+.hermes/
+.cursor/
+*.log
+
+# Ambiente de desenvolvimento
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.tmp/
+tmp/
+__pycache__/
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/*.local.json
+
+# Não adicionar dumps e arquivos locais acidentalmente
+*.dump
+*.sql.gz
+*.bak
+*.backup
