@@ -1,6 +1,6 @@
 # Roadmap de implementação — Agent Toolkit
 
-Status: planejamento; etapas não iniciadas. Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. O documento completo em PDF ainda precisa ser importado e conferido conforme FONTES_E_IMPORTACAO.md.
+Status: planejamento; etapas não iniciadas. Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. Documentos de origem importados na F0.1 (ver [README](README.md) e [ADR-006](adr/ADR-006-correspondencia-de-fases.md) para a correspondência com as fases F0–F7 do PDF).
 
 ## Sequência e critérios
 

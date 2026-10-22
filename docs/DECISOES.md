@@ -15,6 +15,9 @@
 ## ADR-005 — Ativação progressiva
 **Status:** adotada. Iniciar com agentes de leitura, depois escrita controlada, depois MCP e integrações. Hermes com controle do computador, automações de contas e WhatsApp exigem aprovação específica.
 
+## ADR-006 — Correspondência de fases PDF × GitHub
+**Status:** proposta. Ver [adr/ADR-006-correspondencia-de-fases.md](adr/ADR-006-correspondencia-de-fases.md). Nome canônico `agent-toolkit`; repositório público.
+
 ## Pendências
 - Linguagem e runtime preferidos para ferramentas próprias.
 - Formato do contrato de tarefas e mecanismo de armazenamento do catálogo.
