@@ -36,6 +36,12 @@ PRs #1, #2, #3 e #4 integrados na main (o #4 em `504156e`, autorização explíc
 ## Marco: GH-F1.1 concluída (22/10/2026)
 PR #5 integrado na main (`e32a118`) com autorização explícita de Arthur específica para esse PR (commit aprovado `ed522ed`). Em seguida: GH-F1.2, definições documentais dos três agentes em [`agents/`](../agents/README.md), em PR separado (rascunho). Registrado para a GH-F1.3: o alvo da autorização `open_pr` deve usar repositório e branches head/base antes da criação do PR, sem exigir número inexistente. Auditoria independente do Codex continua **pendente**.
 
+## ADR-010 — Materialização em `.claude/`
+**Status:** proposta (GH-F1.3). Ver [adr/ADR-010-materializacao-em-claude-code.md](adr/ADR-010-materializacao-em-claude-code.md) e a [pesquisa](pesquisas/claude-code-materializacao-2026-10-22.md).
+
+## Marco: GH-F1.2 concluída (22/10/2026)
+PR #6 integrado na main (`f60e695`, HEAD aprovado `053d289`) com autorização explícita de Arthur específica para esse PR. GH-F1.3 em revisão: pesquisa da documentação do Claude Code, ADR-010 (proposta), correção do alvo da autorização `open_pr` (contrato de tarefa 0.1.1), critério de estado Git do `planner` (v0.1.1: comparar estado inicial e final, sem exigir árvore limpa) e registro da GH-F1.7 como proposta futura (orquestração hierárquica e 12 especialistas; [estudo](plans/GH-F1-7-orquestracao-hierarquica.md)), **não aprovada**. Auditoria independente do Codex continua **pendente**.
+
 ## Decisões da GH-F1 (22/10/2026, Arthur)
 Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonnet com esforço médio por padrão; Codex como auditor independente quando disponível, planejado após a GH-F1.4 e antes da primeira escrita do piloto, sem ser exigido antes da GH-F1.1. **Um auditor Claude em contexto separado não substitui a auditoria independente do Codex.** Merge: autorização humana obrigatória e específica por PR, com execução delegável ao Claude; proteção de branch fica separada e bloqueada sem autorização especial. Sandbox local condicionado, **não criado**: [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md).
 

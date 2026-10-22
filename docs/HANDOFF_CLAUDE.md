@@ -7,7 +7,8 @@ Este arquivo orienta qualquer sessão de trabalho. Não tente implementar o ecos
 - **GH-F0 / F0.2 (consolidação documental) concluída** (PR #3, 62a99c0): numeração de fases, arquitetura de diretórios ([ARQUITETURA.md](ARQUITETURA.md)) e estrutura de compliance ([compliance/](compliance/README.md)) documentadas. Decisões em [DECISOES.md](DECISOES.md).
 - **GH-F0 concluída:** inventário e matriz de riscos/permissões/aprovações em [../policies/](../policies/) (PR #4).
 - **GH-F1.1 concluída:** contratos de agente, skill e tarefa em [contratos/](contratos/README.md) (PR #5).
-- **GH-F1.2 (em revisão):** definições documentais de `planner`, `implementer` e `auditor` em [../agents/](../agents/README.md); GH-F1.3 em diante só com autorização por etapa.
+- **GH-F1.2 concluída:** definições documentais de `planner`, `implementer` e `auditor` em [../agents/](../agents/README.md) (PR #6).
+- **GH-F1.3 (em revisão):** [pesquisa](pesquisas/claude-code-materializacao-2026-10-22.md), [ADR-010](adr/ADR-010-materializacao-em-claude-code.md) (proposta), correções de contrato e estudo da futura [GH-F1.7](plans/GH-F1-7-orquestracao-hierarquica.md); GH-F1.4 em diante só com autorização por etapa.
 - **Próximo:** GH-F1 (agentes Claude Code), **somente após autorização humana específica**; proposta em [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md).
 - Auditoria independente do Codex: **não realizada** na F0.1 nem na F0.2 (indisponível no ambiente de nuvem); só houve revisão própria e leitura humana; a auditoria continua **pendente**. Registrar o mesmo em fases futuras se continuar assim.
 
