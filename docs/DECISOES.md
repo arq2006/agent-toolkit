@@ -16,12 +16,27 @@
 **Status:** adotada. Iniciar com agentes de leitura, depois escrita controlada, depois MCP e integrações. Hermes com controle do computador, automações de contas e WhatsApp exigem aprovação específica.
 
 ## ADR-006 — Correspondência de fases PDF × GitHub
-**Status:** proposta. Ver [adr/ADR-006-correspondencia-de-fases.md](adr/ADR-006-correspondencia-de-fases.md). Nome canônico `agent-toolkit`; repositório público.
+**Status:** aceita (F0.2). GH-F0 a GH-F6 são a referência operacional; o PDF (PDF-F0 a PDF-F7) é preservado. Ver [adr/ADR-006-correspondencia-de-fases.md](adr/ADR-006-correspondencia-de-fases.md). Nome canônico `agent-toolkit`; repositório público.
+
+## ADR-007 — Arquitetura de diretórios
+**Status:** aceita (F0.2). Fonte neutra na raiz, `integrations/` para ferramentas e provedores, `.claude/` como materialização. Ver [adr/ADR-007-arquitetura-de-diretorios.md](adr/ADR-007-arquitetura-de-diretorios.md) e [ARQUITETURA.md](ARQUITETURA.md).
+
+## ADR-008 — Compliance jurídico separado do técnico
+**Status:** aceita (F0.2). 17 itens, mapa de dados e relatório por projeto em [compliance/](compliance/README.md). Ver [adr/ADR-008-compliance-juridico-separado-do-tecnico.md](adr/ADR-008-compliance-juridico-separado-do-tecnico.md).
+
+## Registro de auditoria independente
+Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 
 ## Pendências
 - Linguagem e runtime preferidos para ferramentas próprias.
 - Formato do contrato de tarefas e mecanismo de armazenamento do catálogo.
 - Política de custos e seleção de modelos.
-- ~~Importação e validação dos dois documentos completos de origem.~~ Concluída na F0.1 (PR #2), com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256); aguardando merge.
-- Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases (F0.2; ver ADR-006).
+- ~~Importação e validação dos dois documentos completos de origem.~~ Concluída na F0.1 (PRs #1 e #2, integrados na main), com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256).
+- ~~Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases.~~ Tratadas na F0.2 (ADR-006, ADR-007, ADR-008); aguardam revisão humana do PR.
+- Auditoria independente (Codex) das F0.1 e F0.2, opcional, na máquina do Arthur.
+- Criar inventário de ferramentas e matriz de risco/aprovação (`policies/`, GH-F0).
+- GH-F1: formato dos contratos de agente, skill e tarefa; mecanismo de materialização em `.claude/`.
+- GH-F2: formato final dos artefatos de compliance e skill `legal-web-check`.
+- Linguagem e runtime preferidos para ferramentas próprias.
+- Política de custos e seleção de modelos.
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.

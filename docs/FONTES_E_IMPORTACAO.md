@@ -4,7 +4,7 @@
 Este repositório público tinha apenas um README na main quando o bootstrap começou. Portanto, **não afirmar que os documentos completos já estão no GitHub**.
 
 ## Atualização F0.1 (22/10/2026)
-O PDF e o roadmap de segurança foram importados sem alterações para `docs/references/` e `docs/security/`, com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256) e varredura de segredos e dados pessoais sem ocorrências. Ver o [índice](README.md). O texto abaixo preserva o histórico da preparação.
+O PDF e o roadmap de segurança foram importados sem alterações para `docs/references/` e `docs/security/`, com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256) e varredura de segredos e dados pessoais sem ocorrências. Ver o [índice](README.md). Na F0.2 o conteúdo do PDF e do roadmap passou a ser referenciado por [ADR-006](adr/ADR-006-correspondencia-de-fases.md), [ARQUITETURA.md](ARQUITETURA.md) e [compliance/](compliance/README.md), sem alterar os originais. O texto abaixo preserva o histórico da preparação; a seção "Tarefa F0.1" já foi executada.
 
 ## Fontes já preparadas fora deste repositório
 1. `Plano_Ecossistema_Agentes_IA_2026.pdf` — estudo e planejamento de 17 páginas, preparado anteriormente.
