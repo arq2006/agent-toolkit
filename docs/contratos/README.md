@@ -5,7 +5,7 @@ Status: **GH-F1.1 (documental)**, 22/10/2026. Define os campos, regras e modelos
 | Contrato | Documento | Onde viverão as instâncias |
 |---|---|---|
 | Agente | [contrato-de-agente.md](contrato-de-agente.md) | `agents/<nome>/` (GH-F1.2) |
-| Skill | [contrato-de-skill.md](contrato-de-skill.md) | `skills/<nome>/` (GH-F2) |
+| Skill | [contrato-de-skill.md](contrato-de-skill.md) | `skills/<nome>/SKILL.md` (Agent Skills) + `contract.yaml` (GH-F2) |
 | Tarefa | [contrato-de-tarefa.md](contrato-de-tarefa.md) | `workflows/` e registro por tarefa (GH-F1.5/F1.6 e seguintes) |
 
 ## Regras comuns
@@ -19,7 +19,7 @@ Status: **GH-F1.1 (documental)**, 22/10/2026. Define os campos, regras e modelos
 8. **Arquivos protegidos** em todos os contratos: `docs/references/`, `docs/security/` e `docs/CHECKSUMS.sha256`.
 
 ## Validação nesta fase
-Manual, por checklist (fim de cada contrato) e pela revisão humana do PR. Validação automatizada (formato dos campos, ferramentas existentes no inventário, permissões ≤ matriz) é trabalho posterior, sujeito a aprovação, e não é criada na GH-F1.1.
+Manual, por checklist (fim de cada contrato) e pela revisão humana do PR. Distinguir sempre: **YAML válido**, **conformidade com Agent Skills** e **conformidade com o contrato do toolkit** (detalhes em [contrato-de-skill.md](contrato-de-skill.md)). Validação automatizada (formato dos campos, ferramentas existentes no inventário, permissões ≤ matriz) é trabalho posterior, sujeito a aprovação, e não é criada na GH-F1.1.
 
 ## Formato
 Instâncias são arquivos Markdown com bloco YAML de cabeçalho (front matter) seguido de instruções em prosa. YAML é escolhido por ser legível e revisável em PR; o esquema formal (por exemplo JSON Schema) é pendência da GH-F1.3/GH-F2.
