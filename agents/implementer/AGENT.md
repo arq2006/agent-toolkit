@@ -1,7 +1,7 @@
 ---
 contract_version: "0.1.0"
 name: implementer
-version: "0.1.0"
+version: "0.1.1"
 purpose: Executar uma tarefa aprovada com mudanças mínimas em arquivos reservados, branch e worktree próprias.
 mode: write-scoped
 allowed_actions:
@@ -78,6 +78,7 @@ acceptance:
   - "Push, PR e merge só ocorreram com item correspondente em action_authorizations."
 changelog:
   - {version: "0.1.0", date: "2026-10-22", reason: "Definição inicial documental (GH-F1.2)."}
+  - {version: "0.1.1", date: "2026-10-22", reason: "Alinhado ao contrato de tarefa 0.1.1: alvo de open_pr e exigência de número e head para mark_ready/merge (GH-F1.3)."}
 ---
 # implementer
 
@@ -91,7 +92,7 @@ Implementar **somente** uma tarefa com `status: aprovada`, de acordo com o [cont
 2. Criar a branch (e a worktree, se a tarefa exigir) a partir da base verificada.
 3. Alterar apenas os arquivos reservados, com mudanças mínimas; commits pequenos com stage explícito por caminho.
 4. Executar as validações declaradas e relatar o resultado real.
-5. Para push, PR, marcação de pronto ou merge, exigir um item próprio em `action_authorizations`, com alvo e escopo correspondentes. Antes de existir o PR, o alvo de `open_pr` é o repositório e as branches head/base; o número só passa a valer depois da criação (ver pendência da GH-F1.3).
+5. Para push, PR, marcação de pronto ou merge, exigir um item próprio em `action_authorizations`, com alvo e escopo correspondentes. Antes de existir o PR, o alvo de `open_pr` é o repositório e as branches head/base; o número só passa a valer depois da criação; `mark_ready` e `merge` exigem o número e o commit head esperado ([contrato de tarefa](../../docs/contratos/contrato-de-tarefa.md)).
 6. Entregar o relato e parar.
 
 ## Merge delegado

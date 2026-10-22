@@ -1,6 +1,6 @@
 # Contrato de tarefa
 
-Versão do contrato: 0.1.0 (proposta, até a integração). Cada tarefa delegada a um agente tem um registro; formato final do arquivo a definir (GH-F1.3). Instâncias reais só quando houver tarefas (pilotos GH-F1.5/F1.6 e seguintes). Fluxo: Intake → Preflight → Análise read-only → Plano curto → Reserva de arquivos/worktree → Implementação → Testes → Auditoria independente → Correções → Aprovação humana → Commit/push/PR manual.
+Versão do contrato: 0.1.1 (revisão da GH-F1.3: alvo de `open_pr` e critério de estado Git; ver histórico no [README](README.md)). Cada tarefa delegada a um agente tem um registro; formato final do arquivo a definir (GH-F1.3). Instâncias reais só quando houver tarefas (pilotos GH-F1.5/F1.6 e seguintes). Fluxo: Intake → Preflight → Análise read-only → Plano curto → Reserva de arquivos/worktree → Implementação → Testes → Auditoria independente → Correções → Aprovação humana → Commit/push/PR manual.
 
 ## Campos
 
@@ -47,11 +47,11 @@ A aprovação do plano **não** autoriza push, abertura de PR nem merge. Cada a�
 | Campo | Conteúdo |
 |---|---|
 | `action` | `push`, `open_pr`, `mark_ready` ou `merge` (uma por item) |
-| `target` | alvo específico: branch para push; PR para as demais (número e repositório) |
+| `target` | alvo específico. `push`: repositório e branch. `open_pr` (PR ainda inexistente): **repositório, branch head e branch base**, sem número. `mark_ready` e `merge` (PR já existe): repositório e **número do PR**, com o commit head esperado. Depois de criado, o número do PR pode ser anotado no item de `open_pr` |
 | `authorized_by`, `authorized_at`, `authorization_ref` | pessoa, data e referência verificável |
 | `scope` | limites da autorização (ex.: head verificado, "somente este PR") |
 
-Regras: uma autorização vale **só** para a ação e o alvo registrados; autorizar `open_pr` não autoriza `merge`; autorização de um PR não vale para outro; execução delegada ao Claude segue a [matriz](../../policies/matriz-riscos-permissoes-aprovacoes.md); alteração de proteção de branch não é ação de tarefa e exige autorização especial fora deste contrato.
+Regras: uma autorização vale **só** para a ação e o alvo registrados; `mark_ready` e `merge` exigem o número do PR e o commit head esperado (o PR precisa existir); autorizar `open_pr` não autoriza `merge`; autorização de um PR não vale para outro; execução delegada ao Claude segue a [matriz](../../policies/matriz-riscos-permissoes-aprovacoes.md); alteração de proteção de branch não é ação de tarefa e exige autorização especial fora deste contrato.
 
 ## Regras
 1. **Reserva exclusiva:** duas tarefas com escrita nunca reservam o mesmo arquivo; colisão interrompe a execução e é relatada.
@@ -84,7 +84,7 @@ mode: read-only
 permissions: [{op: read_repository, level: A0}]
 approvals_required: []
 acceptance_criteria: ["Nenhum arquivo alterado", "Resumo cita caminhos lidos"]
-tests: ["git status limpo ao final"]
+tests: ["estado Git ao final idêntico ao inicial (HEAD, branch, status, diff)"]
 stop_conditions: [instruction_in_external_content, scope_exceeded]
 evidence_required: [summary, risks, pending, commands]
 audit: {independent: codex (pendente), additional: claude-separate-context}
@@ -101,11 +101,11 @@ authorization_ref: <mensagem ou registro verificável>
 approved_scope: "GH-F1.5; leitura somente; sem arquivos reservados; permissões A0"
 action_authorizations:
   - action: open_pr
-    target: {repository: <repo>, pr: <numero>}
+    target: {repository: <repo>, head: <branch-head>, base: <branch-base>}   # PR ainda não existe: sem número
     authorized_by: <pessoa>
     authorized_at: AAAA-MM-DDTHH:MM:SSZ
     authorization_ref: <referência>
-    scope: "somente este PR, em rascunho"
+    scope: "um PR em rascunho entre essas branches"
 ```
 
 ## Checklist de revisão
