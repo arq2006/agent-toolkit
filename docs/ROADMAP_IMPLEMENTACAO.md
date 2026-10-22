@@ -1,16 +1,16 @@
 # Roadmap de implementação — Agent Toolkit
 
-Status: planejamento; GH-F0.1 (importação dos documentos de origem) concluída (PRs #1 e #2, integrados na main); GH-F0.2 (consolidação documental) em revisão; GH-F1 a GH-F6 não iniciadas. Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. Documentos de origem importados na F0.1 (ver [README](README.md)). **Numeração:** as fases deste roadmap são **GH-F0 a GH-F6** (referência operacional); o PDF usa PDF-F0 a PDF-F7. Correspondência em [ADR-006](adr/ADR-006-correspondencia-de-fases.md).
+Status: planejamento; GH-F0.1 (importação dos documentos de origem) concluída (PRs #1 e #2, integrados na main); GH-F0.2 (consolidação documental) concluída (PR #3, 62a99c0); pendências da GH-F0 (inventário e matriz de riscos em `policies/`) em revisão; GH-F1 a GH-F6 não iniciadas (plano da GH-F1 em [plans/](plans/GH-F1-arquitetura-inicial-agentes.md), aguardando aprovação). Base: estudo prévio “Ecossistema pessoal de agentes de IA e automações”, de 22/10/2026. Documentos de origem importados na F0.1 (ver [README](README.md)). **Numeração:** as fases deste roadmap são **GH-F0 a GH-F6** (referência operacional); o PDF usa PDF-F0 a PDF-F7. Correspondência em [ADR-006](adr/ADR-006-correspondencia-de-fases.md).
 
 ## Sequência e critérios
 
-### GH-F0 — Fundamentação e publicação de documentos (F0.1 concluída; F0.2 em revisão) · origem: PDF-F0
+### GH-F0 — Fundamentação e publicação de documentos (F0.1 e F0.2 concluídas; políticas em revisão) · origem: PDF-F0
 - Conferir README, CLAUDE.md, AGENTS.md e política para repositório público.
 - Importar sem perda os dois arquivos de referência: PDF do plano e Markdown completo de segurança.
 - Verificar conteúdo, hash, atribuição e ausência de segredos/dados pessoais antes de publicar.
 - Criar índice documental, decisões arquiteturais e tarefas de implementação.
 - F0.2: padronizar fases ([ADR-006](adr/ADR-006-correspondencia-de-fases.md)), definir a arquitetura de diretórios ([ARQUITETURA.md](ARQUITETURA.md), [ADR-007](adr/ADR-007-arquitetura-de-diretorios.md)) e estruturar compliance ([ADR-008](adr/ADR-008-compliance-juridico-separado-do-tecnico.md)).
-- Pendente (PDF-F0, sem implementação ainda): inventário de ferramentas e matriz de risco/aprovação (`policies/`), a serem criados como documentos antes da GH-F1.
+- Inventário de ferramentas e integrações ([policies/inventario-ferramentas-integracoes.md](../policies/inventario-ferramentas-integracoes.md)) e matriz de riscos, permissões e aprovações ([policies/matriz-riscos-permissoes-aprovacoes.md](../policies/matriz-riscos-permissoes-aprovacoes.md)): documentos criados, aguardando revisão humana.
 **Aceite:** referências completas versionadas; nenhum arquivo privado publicado; revisão humana concluída.
 
 ### GH-F1 — Agentes Claude Code · origem: PDF-F1 e PDF-F2

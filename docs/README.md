@@ -9,6 +9,9 @@
 | [adr/ADR-007-arquitetura-de-diretorios.md](adr/ADR-007-arquitetura-de-diretorios.md) | Decisão sobre a estrutura de diretórios |
 | [adr/ADR-008-compliance-juridico-separado-do-tecnico.md](adr/ADR-008-compliance-juridico-separado-do-tecnico.md) | Decisão sobre compliance jurídico × auditoria técnica |
 | [compliance/README.md](compliance/README.md) | Compliance: checklist de 17 itens, mapa de dados e relatório por projeto |
+| [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) | Proposta de arquitetura dos 3 agentes da GH-F1 (planejamento) |
+| [../policies/inventario-ferramentas-integracoes.md](../policies/inventario-ferramentas-integracoes.md) | Inventário de ferramentas e integrações |
+| [../policies/matriz-riscos-permissoes-aprovacoes.md](../policies/matriz-riscos-permissoes-aprovacoes.md) | Matriz de riscos, permissões e aprovações |
 | [FONTES_E_IMPORTACAO.md](FONTES_E_IMPORTACAO.md) | Fontes de referência e regras de importação |
 | [HANDOFF_CLAUDE.md](HANDOFF_CLAUDE.md) | Instruções de início para o Claude Code |
 | [references/Plano_Ecossistema_Agentes_IA_2026.pdf](references/Plano_Ecossistema_Agentes_IA_2026.pdf) | Plano original (PDF, 17 páginas), preservado sem alterações |

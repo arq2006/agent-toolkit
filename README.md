@@ -26,7 +26,8 @@ Ecossistema reutilizável de agentes de IA, skills, ferramentas e fluxos de trab
 Árvore alvo completa, mapa de reconciliação e justificativa em [docs/ARQUITETURA.md](docs/ARQUITETURA.md) (ADR-007). Resumo:
 
 - `docs/`: planejamento, decisões, segurança, compliance e referências (existente).
-- `policies/`, `agents/`, `skills/`, `workflows/`: fonte neutra de políticas, agentes, skills e fluxos (futuro).
+- `policies/`: inventário de ferramentas e matriz de riscos, permissões e aprovações (existente).
+- `agents/`, `skills/`, `workflows/`: fonte neutra de agentes, skills e fluxos (futuro).
 - `integrations/`: materialização para Claude Code, Codex, Hermes, MCP e adaptador modelo (futuro).
 - `.claude/`: camada de materialização para Claude Code (GH-F1).
 - `experiments/`, `src/`, `tests/`, `examples/`, `scripts/`: somente quando houver conteúdo real e tecnologia escolhida.
@@ -41,6 +42,7 @@ Repositório **público**: não publicar tokens, senhas, dados pessoais, histór
 
 - [Plano do ecossistema de agentes (PDF)](docs/references/Plano_Ecossistema_Agentes_IA_2026.pdf)
 - [Roadmap de segurança geral v3](docs/security/Roadmap_Seguranca_Geral_v3.md)
+- [Inventário de ferramentas](policies/inventario-ferramentas-integracoes.md) e [matriz de riscos e aprovações](policies/matriz-riscos-permissoes-aprovacoes.md)
 - Compliance (checklist de 17 itens, mapa de dados, relatório): [docs/compliance/](docs/compliance/README.md)
 - Integridade: [docs/CHECKSUMS.sha256](docs/CHECKSUMS.sha256)
 
