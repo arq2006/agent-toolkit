@@ -24,6 +24,12 @@
 ## ADR-008 — Compliance jurídico separado do técnico
 **Status:** aceita (F0.2). 17 itens, mapa de dados e relatório por projeto em [compliance/](compliance/README.md). Ver [adr/ADR-008-compliance-juridico-separado-do-tecnico.md](adr/ADR-008-compliance-juridico-separado-do-tecnico.md).
 
+## Marco: GH-F0.2 concluída (22/10/2026)
+PR #3 integrado na main com autorização explícita de Arthur (commit de merge 62a99c0). Em seguida: inventário de ferramentas e matriz de riscos/permissões/aprovações em `policies/` e plano da arquitetura GH-F1 em [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) (proposta, sem implementação).
+
+## Decisões da GH-F1 (22/10/2026, Arthur)
+Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonnet com esforço médio por padrão; Codex como auditor independente quando disponível, planejado após a GH-F1.4 e antes da primeira escrita do piloto, sem ser exigido antes da GH-F1.1. **Um auditor Claude em contexto separado não substitui a auditoria independente do Codex.** Merge: autorização humana obrigatória e específica por PR, com execução delegável ao Claude; proteção de branch fica separada e bloqueada sem autorização especial. Sandbox local condicionado, **não criado**: [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md).
+
 ## Registro de auditoria independente
 Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 
@@ -32,11 +38,9 @@ Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no
 - Formato do contrato de tarefas e mecanismo de armazenamento do catálogo.
 - Política de custos e seleção de modelos.
 - ~~Importação e validação dos dois documentos completos de origem.~~ Concluída na F0.1 (PRs #1 e #2, integrados na main), com SHA-256 em [CHECKSUMS.sha256](CHECKSUMS.sha256).
-- ~~Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases.~~ Tratadas na F0.2 (ADR-006, ADR-007, ADR-008); aguardam revisão humana do PR.
-- Auditoria independente (Codex) das F0.1 e F0.2, opcional, na máquina do Arthur.
-- Criar inventário de ferramentas e matriz de risco/aprovação (`policies/`, GH-F0).
+- ~~Reconciliação de estrutura de pastas, lacuna de compliance do PDF F3 e numeração única de fases.~~ Tratadas na F0.2 (ADR-006, ADR-007, ADR-008); PR #3 integrado na main (62a99c0).
+- **Auditoria independente (Codex) das F0.1 e F0.2 continua pendente**; não foi realizada. Executar na máquina do Arthur, com autorização.
+- ~~Inventário de ferramentas e matriz de risco/aprovação (GH-F0).~~ Criados em [policies/](../policies/) (aguardam revisão humana do PR).
 - GH-F1: formato dos contratos de agente, skill e tarefa; mecanismo de materialização em `.claude/`.
 - GH-F2: formato final dos artefatos de compliance e skill `legal-web-check`.
-- Linguagem e runtime preferidos para ferramentas próprias.
-- Política de custos e seleção de modelos.
 - Estratégia de publicação do toolkit em outros repositórios sem copiar credenciais.

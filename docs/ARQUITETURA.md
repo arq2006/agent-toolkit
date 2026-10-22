@@ -19,7 +19,7 @@ agent-toolkit/
 │   ├── adr/                   # decisões detalhadas
 │   ├── references/ · security/  # importados na F0.1; imutáveis (ver CHECKSUMS.sha256)
 │   └── compliance/            # checklist jurídico, mapa de dados, relatório (F0.2)
-├── policies/                  # GH-F0: matriz de aprovação, segurança de dados, inventário de ferramentas, matriz de risco
+├── policies/                  # GH-F0: inventário de ferramentas e matriz de riscos/permissões/aprovações (existentes); segurança de dados (futuro)
 ├── agents/                    # GH-F1: definições neutras (planner, implementer, reviewer/auditor)
 ├── skills/                    # GH-F2: skills no padrão Agent Skills (SKILL.md + apoio)
 ├── workflows/                 # GH-F1/F2: fluxos (feature, bugfix, audit, media), contrato de tarefa
