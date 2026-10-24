@@ -74,8 +74,11 @@ def _validate_request(request):
         if type(path) is not str:
             raise RequestDenied("invalid_path")
         try:
+            # json.loads aceita surrogates escapados (\\ud800); o SO Linux
+            # pode lançar UnicodeEncodeError no os.open para esses caminhos.
+            path.encode("utf-8", "strict")
             pathguard.split_relpath(path)
-        except pathguard.PathGuardError:
+        except (UnicodeError, pathguard.PathGuardError):
             raise RequestDenied("invalid_path") from None
 
 
@@ -105,9 +108,10 @@ def dispatch(root_fd, request):
                 raise RequestDenied("invalid_encoding") from None
             return {"ok": True, "op": "read", "text": decoded}
         path = request.get("path")
-        names = pathguard.list_dir(root_fd, path)
-        if len(names) > MAX_LIST_ENTRIES:
-            raise RequestDenied("too_many_entries")
+        try:
+            names = pathguard.list_dir(root_fd, path, max_entries=MAX_LIST_ENTRIES)
+        except pathguard.ListLimitExceeded:
+            raise RequestDenied("too_many_entries") from None
         return {"ok": True, "op": "list", "entries": names}
     except pathguard.PathGuardError:
         raise RequestDenied("path_denied") from None
