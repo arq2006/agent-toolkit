@@ -141,8 +141,7 @@ class ReadonlyPreflightTests(unittest.TestCase):
         self.blocked()
 
     def test_empty_materialized_body_blocked(self):
-        self.write(".claude/agents/planner.md", materialized("planner").split("---\n")[:2][0] if False
-                   else materialized("planner").rsplit("---\n", 1)[0] + "---\n")
+        self.write(".claude/agents/planner.md", materialized("planner").rsplit("---\n", 1)[0] + "---\n")
         self.blocked()
 
     def test_neutral_source_escalation_blocked(self):
