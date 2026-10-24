@@ -18,7 +18,9 @@
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
 | [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md) | Proposta de arquitetura dos 3 agentes da GH-F1 (planejamento) |
-| [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md) | Condições aprovadas do sandbox local da GH-F1.5/F1.6 (não criado) |
+| [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md) | Autorização original para sandbox em `~/Projetos/` (não criado nesse caminho); ambiente histórico separado em `/home/agent-pilot/` |
+| [plans/GH-F1-5-preflight-reconciliation.md](plans/GH-F1-5-preflight-reconciliation.md) | Verificação estática de agentes read-only; execução não autorizada |
+| [pilotos/GH-F1-5-reconciliacao-2026-10-24.md](pilotos/GH-F1-5-reconciliacao-2026-10-24.md) | Diagnóstico das rodadas anteriores e gates de isolamento; PR #9 preservado em Draft |
 | [../policies/inventario-ferramentas-integracoes.md](../policies/inventario-ferramentas-integracoes.md) | Inventário de ferramentas e integrações |
 | [../policies/matriz-riscos-permissoes-aprovacoes.md](../policies/matriz-riscos-permissoes-aprovacoes.md) | Matriz de riscos, permissões e aprovações |
 | [FONTES_E_IMPORTACAO.md](FONTES_E_IMPORTACAO.md) | Fontes de referência e regras de importação |

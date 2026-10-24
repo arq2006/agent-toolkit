@@ -2,6 +2,10 @@
 
 Status: **condições aprovadas por Arthur em 22/10/2026; o sandbox NÃO foi criado.** Este documento registra as condições; ele não executa nada. Plano geral: [GH-F1-arquitetura-inicial-agentes.md](GH-F1-arquitetura-inicial-agentes.md). Políticas: [matriz](../../policies/matriz-riscos-permissoes-aprovacoes.md).
 
+## Nota de reconciliação de 24/10/2026 — caminhos distintos
+
+O status original acima descreve **somente** o caminho `~/Projetos/agent-toolkit-sandbox` da autorização de 22/10. O diagnóstico atual informou que esse caminho específico **não existe**. **Existe, em separado**, uma conta `agent-pilot` e um sandbox histórico em `/home/agent-pilot/agent-toolkit-sandbox` com repositório fictício, snapshots e rodadas anteriores. A existência desse segundo sandbox não está abrangida automaticamente pela autorização de criação do caminho original; **não o recriar, sobrescrever, apagar ou migrar**. A situação observada e os limites dos resultados estão registrados em [GH-F1.5 — reconciliação de evidências](../pilotos/GH-F1-5-reconciliacao-2026-10-24.md). Nenhuma nova execução de agente ou alteração do ambiente foi autorizada por esta nota.
+
 ## Autorização (limitada)
 Criação de um repositório Git **local e descartável** em `~/Projetos/agent-toolkit-sandbox`, **exclusivamente** para a GH-F1.5 e a GH-F1.6. Não vale para nenhuma outra etapa, caminho ou finalidade.
 

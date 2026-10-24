@@ -1,6 +1,8 @@
 # GH-F1.5 — Pré-validação estática e reconciliação do PR #9
 
-**Estado: preparação somente leitura. Nenhum piloto foi executado por esta entrega; nenhum sandbox, conta, hook, skill, MCP, worktree ou configuração foi criado no computador.**
+**Estado: pré-validação estática concluída nesta etapa; a execução real anterior foi analisada documentalmente em 24/10.** Este PR de pré-validação não executou agentes nem criou sandbox, conta, hook, skill, MCP, worktree ou configuração. A análise de evidências históricas está em [GH-F1.5 — Reconciliação de evidências e arquitetura](../pilotos/GH-F1-5-reconciliacao-2026-10-24.md).
+
+**Resultado histórico posterior ao registro inicial abaixo:** no dispositivo do operador, `agent-pilot` e `/home/agent-pilot/agent-toolkit-sandbox` **já existem**. Duas rodadas anteriores apresentaram snapshots Git idênticos, hashes conferidos e inventário efetivo `Read/Grep/Glob`; outra rodada permanece incompleta. Nenhuma das rodadas realizou chamada `Read` ao alvo externo no probe; **isolamento de leitura externa não comprovado**. Não repetir instruções de criação de sandbox por causa deste registro. Os números relativos ao PR #9 abaixo são um **snapshot de consulta anterior**; ver a reconciliação para os números mais recentes.
 
 ## Situação real verificada no GitHub (24/10/2026)
 
