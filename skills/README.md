@@ -1,6 +1,6 @@
 # Biblioteca de skills — GH-F2.0 (catálogo) + GH-F2.1 (revisão de candidatas)
 
-**Status: GH-F2.0 integrada; GH-F2.1 em revisão em branch própria. Nenhuma skill foi implantada por estas entregas.** O `catalog.json` é um inventário de candidatas, não uma coleção de contratos `SKILL.md` aprovados. Para adotar uma skill de verdade, será preciso criar `skills/<nome>/SKILL.md` e `contract.yaml` conforme o [contrato de skill](../docs/contratos/contrato-de-skill.md).
+**Status: GH-F2.0 e GH-F2.1 integradas. GH-F2.1b propõe a primeira skill neutra, sem materialização nem ativação. Nenhuma skill de terceiros foi implantada por estas entregas.** O `catalog.json` é um inventário de candidatas, não uma coleção de contratos `SKILL.md` aprovados. Para adotar uma skill de verdade, será preciso criar `skills/<nome>/SKILL.md` e `contract.yaml` conforme o [contrato de skill](../docs/contratos/contrato-de-skill.md).
 
 - Fonte neutra conforme [ADR-007](../docs/adr/ADR-007-arquitetura-de-diretorios.md). Nada é materializado em `.claude/` nesta etapa.
 - `reported-global` significa instalação **relatada no handoff de outro projeto**, não verificada no toolkit ou no host. O catálogo não desativa nem restringe plugins globais já instalados no Claude Code.
@@ -41,6 +41,13 @@ O coordenador futuro não usa este catálogo automaticamente. Permissões reais 
 A revisão preliminar de seis candidatas de UI/UX, Frontend e QA está registrada em [GH-F2-1-candidates.json](reviews/GH-F2-1-candidates.json), com commits/SHA, licenças observadas, riscos, dependências e **minutas de contrato**. O validador somente leitura `python3 scripts/validate_skill_reviews.py --json` e os testes `python3 -m unittest discover -s tests -p 'test_skill_reviews.py' -v` conferem restrições negativas. Não são `SKILL.md` ou `contract.yaml` instaláveis: são propostas ainda não aprovadas.
 
 Em especial: Impeccable pode obter binário e instalar hooks; Webapp Testing inclui helper `shell=True`; Web Design Guidelines consulta regras remotas mutáveis e não apresentou licença verificada no material revisado. Esses itens **não podem receber ativação automática**. Os níveis de risco no catálogo agora refletem esses achados. Nenhum código de terceiros foi copiado.
+
+
+## Primeira skill própria (GH-F2.1b, proposta)
+
+[ui-design-review-readonly](ui-design-review-readonly/SKILL.md) é uma definição **original** de revisão UI/UX em modo A0, com [contrato de acesso](ui-design-review-readonly/contract.yaml) e [plano de avaliação](../docs/plans/GH-F2-1b-ui-review-skill.md). Permite somente propor achados com evidências sobre UI já fornecida ou autorizada; não executa Impeccable, Replica, webapp-testing ou qualquer ferramenta de terceiros.
+
+**Fonte neutra não é instalação:** esta pasta não é copiada para `.claude/skills/`, nem habilitada para agentes. O validador `python3 scripts/validate_ui_review_skill.py` verifica estrutura e permissões declaradas; não comprova isolamento real. O contrato usa JSON válido como subconjunto de YAML 1.2 para validação offline pela stdlib. GH-F2.2 (integração aos agentes) continua condicionada à GH-F1.7 e suas verificações.
 
 ## Princípios de eficiência e adoção
 
