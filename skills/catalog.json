@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "mode": "advisory-only",
+  "roles": [
+    "ui-ux",
+    "frontend",
+    "backend",
+    "database",
+    "devops",
+    "security",
+    "qa",
+    "architecture",
+    "api",
+    "performance",
+    "documentation",
+    "management"
+  ],
+  "skills": [
+    {
+      "id": "replica-design",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "ui-ux",
+        "frontend"
+      ],
+      "tags": [
+        "design_system",
+        "ui_review"
+      ],
+      "priority": 95,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "impeccable",
+      "kind": "skill",
+      "source": "https://github.com/pbakaus/impeccable",
+      "license_reported": "a verificar na adoção",
+      "state": "reported-global",
+      "risk": "low",
+      "roles": [
+        "ui-ux",
+        "frontend"
+      ],
+      "tags": [
+        "ui_review",
+        "design_system"
+      ],
+      "priority": 90,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "frontend-design",
+      "kind": "skill",
+      "source": "https://github.com/anthropics/skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "ui-ux",
+        "frontend"
+      ],
+      "tags": [
+        "design_system",
+        "frontend_build"
+      ],
+      "priority": 85,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "web-design-guidelines",
+      "kind": "skill",
+      "source": "https://github.com/vercel-labs/agent-skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "ui-ux",
+        "qa",
+        "frontend"
+      ],
+      "tags": [
+        "ui_review",
+        "accessibility"
+      ],
+      "priority": 88,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-recon",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "ui-ux",
+        "architecture",
+        "management"
+      ],
+      "tags": [
+        "reference_analysis",
+        "planning"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-build",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "medium",
+      "roles": [
+        "frontend"
+      ],
+      "tags": [
+        "frontend_build"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "vercel-react-best-practices",
+      "kind": "skill",
+      "source": "https://github.com/vercel-labs/agent-skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "frontend",
+        "performance"
+      ],
+      "tags": [
+        "react_performance",
+        "frontend_build"
+      ],
+      "priority": 90,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "vercel-composition-patterns",
+      "kind": "skill",
+      "source": "https://github.com/vercel-labs/agent-skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "frontend",
+        "architecture"
+      ],
+      "tags": [
+        "react_architecture"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "anatomy",
+      "kind": "skill",
+      "source": "https://github.com/wheresryan22/anatomy",
+      "license_reported": "MIT declarado no repositório",
+      "state": "reported-global",
+      "risk": "low",
+      "roles": [
+        "ui-ux"
+      ],
+      "tags": [
+        "technical_visualization"
+      ],
+      "priority": 65,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-architect",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "architecture",
+        "database",
+        "api"
+      ],
+      "tags": [
+        "system_architecture",
+        "data_model"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-backend",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "high",
+      "roles": [
+        "backend",
+        "api"
+      ],
+      "tags": [
+        "backend_feature",
+        "api_integration"
+      ],
+      "priority": 75,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-test",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "qa",
+        "frontend"
+      ],
+      "tags": [
+        "qa_web"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "webapp-testing",
+      "kind": "skill",
+      "source": "https://github.com/anthropics/skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "qa"
+      ],
+      "tags": [
+        "qa_web"
+      ],
+      "priority": 90,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-diff",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "qa",
+        "ui-ux"
+      ],
+      "tags": [
+        "interface_comparison"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-entrepreneur",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "management"
+      ],
+      "tags": [
+        "product_research"
+      ],
+      "priority": 75,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-brand",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "management",
+        "ui-ux"
+      ],
+      "tags": [
+        "branding"
+      ],
+      "priority": 65,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-launch",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "low",
+      "roles": [
+        "management",
+        "documentation"
+      ],
+      "tags": [
+        "marketing"
+      ],
+      "priority": 60,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "replica-deploy",
+      "kind": "skill",
+      "source": "https://github.com/Jakeschincariol/replica-skill",
+      "license_reported": "MIT declarado no repositório",
+      "state": "candidate",
+      "risk": "high",
+      "roles": [
+        "devops"
+      ],
+      "tags": [
+        "deployment"
+      ],
+      "priority": 60,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "motionmaxxing",
+      "kind": "skill",
+      "source": "https://github.com/Tejashmakwana/motionmaxxing",
+      "license_reported": "Apache-2.0 declarado no repositório",
+      "state": "reported-global",
+      "risk": "medium",
+      "roles": [
+        "ui-ux",
+        "management"
+      ],
+      "tags": [
+        "marketing",
+        "motion"
+      ],
+      "priority": 55,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "ponytail",
+      "kind": "plugin",
+      "source": "https://github.com/DietrichGebert/ponytail",
+      "license_reported": "a verificar na adoção",
+      "state": "reported-global",
+      "risk": "medium",
+      "roles": [
+        "architecture",
+        "backend",
+        "frontend",
+        "qa"
+      ],
+      "tags": [
+        "implementation_workflow"
+      ],
+      "priority": 75,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "superpowers",
+      "kind": "plugin",
+      "source": "https://github.com/obra/superpowers",
+      "license_reported": "a verificar",
+      "state": "disabled",
+      "risk": "medium",
+      "roles": [
+        "architecture",
+        "qa",
+        "backend",
+        "frontend"
+      ],
+      "tags": [
+        "planning",
+        "debugging"
+      ],
+      "priority": 70,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    },
+    {
+      "id": "skill-creator",
+      "kind": "skill",
+      "source": "https://github.com/anthropics/skills",
+      "license_reported": "a verificar",
+      "state": "candidate",
+      "risk": "medium",
+      "roles": [
+        "documentation",
+        "architecture"
+      ],
+      "tags": [
+        "skill_authoring"
+      ],
+      "priority": 80,
+      "approved_for_use": false,
+      "toolkit_installed": false
+    }
+  ],
+  "external_integrations": [
+    {
+      "id": "openviking",
+      "kind": "service",
+      "source": "https://github.com/volcengine/OpenViking",
+      "status": "research-only"
+    },
+    {
+      "id": "google-artemis",
+      "kind": "framework",
+      "source": "https://github.com/google/artemis",
+      "status": "research-only"
+    },
+    {
+      "id": "unsloth",
+      "kind": "framework",
+      "source": "https://github.com/unslothai/unsloth",
+      "status": "research-only"
+    },
+    {
+      "id": "codexr-topmate",
+      "kind": "reference",
+      "source": "https://topmate.io/code_xr",
+      "status": "research-only"
+    }
+  ]
+}
