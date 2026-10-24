@@ -34,6 +34,19 @@ Testes (diretórios temporários fictícios): `python3 -I -m unittest discover -
   [GH-F1.8 — read-only executor](../../docs/plans/GH-F1-8-readonly-executor-boundary.md).
 - Testes propostos: `python3 -I -m unittest discover -s integrations/isolation -p 'test_readonly_executor.py' -v`.
 
+## PR5: integração SRT read-only **somente fictícia** (ainda sem agentes)
+
+- `srt_readonly_pilot.py`: CLI fechada (`--synthetic-only`) para executar
+  o `readonly_executor.py` sob SRT usando somente uma fixture temporária.
+  A política mantém `denyRead=["/"]`, libera leitura apenas do fixture e do
+  runtime estritamente validado, exige `allowWrite=[]` e rede deny. Testa
+  leitura/listagem positiva, recusas por caminhos inválidos, leitura nativa
+  externa, escrita nativa e hardlink fictício. O status `STRONG` permanece
+  `UNAVAILABLE`, `agent_execution_authorized=false` mesmo se passar.
+  **Não** usa Claude, MCP ou workspaces reais. Os testes com SRT falso
+  precisam reprovar, não provar isolamento. Detalhes:
+  [GH-F1.8 PR5 — SRT sintético](../../docs/plans/GH-F1-8-srt-readonly-synthetic-pilot.md).
+
 ## PR3: launcher SRT e doctor (diagnóstico; não libera agentes)
 
 - `srt_launcher.py`: detecta (nunca instala) `srt` **exatamente 0.0.81**, `node`, `bwrap` (>= 0.8.0; só 0.12.0 foi
