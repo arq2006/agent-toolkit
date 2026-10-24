@@ -162,6 +162,12 @@ def _worker(deps, fx, root, suite, timeout):
     return None
 
 
+def _item(results, name):
+    """Normaliza dados de saída malformados como falha, sem AttributeError."""
+    value = results.get(name) if type(results) is dict else None
+    return value if type(value) is dict else {}
+
+
 def classify(baseline, hardlink, marker):
     """PASS exige controles positivos e negativos concretos na mesma execução real."""
     checks = []
@@ -171,20 +177,21 @@ def classify(baseline, hardlink, marker):
         check("baseline_executed", False)
         return checks
     check("baseline_executed", True)
-    r = baseline.get("read_inside", {})
+    r = _item(baseline, "read_inside")
     check("authorized_read", r.get("ok") is True
           and r.get("response") == {"ok": True, "op": "read", "text": marker})
-    listed = baseline.get("list_inside", {})
-    entries = listed.get("response", {}).get("entries", [])
+    listed = _item(baseline, "list_inside")
+    response = _item(listed, "response")
+    entries = response.get("entries", [])
     check("authorized_list", listed.get("ok") is True and
           isinstance(entries, list) and "sample.txt" in entries
           and all(x in entries for x in SOURCE_FILES))
     for key, expected in (("reject_traversal", "invalid_path"),
                           ("reject_absolute", "invalid_path"),
                           ("reject_write_request", "operation_denied")):
-        r = baseline.get(key, {})
+        r = _item(baseline, key)
         check(key, r.get("ok") is False and r.get("code") == expected)
-    native = baseline.get("native_external_read", {})
+    native = _item(baseline, "native_external_read")
     check("native_external_read_blocked", native.get("opened") is False)
     check("native_write_blocked", baseline.get("native_write_denied") is True)
     if hardlink is None:
@@ -192,8 +199,12 @@ def classify(baseline, hardlink, marker):
         return checks
     check("hardlink_suite_executed", True)
     for key in ("hardlink_denied", "normal_read_denied_with_hardlink"):
-        r = hardlink.get(key, {})
+        r = _item(hardlink, key)
         check(key, r.get("ok") is False and r.get("code") == "unsafe_tree")
+    native_hardlink = _item(hardlink, "native_hardlink")
+    check("native_hardlink_result_consistent",
+          (native_hardlink.get("opened") is True and native_hardlink.get("matched") is True)
+          or (native_hardlink.get("opened") is False and native_hardlink.get("matched") is False))
     # A vulnerabilidade nativa é explicitada separadamente, sem pontuar como PASS.
     return checks
 
@@ -219,7 +230,7 @@ def run_synthetic(deps=None, timeout=L.DEFAULT_TIMEOUT):
                 if json.load(inp) != policy:
                     raise SyntheticPilotError("política gravada difere da validada")
             baseline = _worker(deps, fx, root, "baseline", timeout)
-            if baseline is not None and baseline.get("read_inside", {}).get("ok") is True:
+            if baseline is not None and _item(baseline, "read_inside").get("ok") is True:
                 # Só um hardlink novo da fixture fictícia, fora de quaisquer projetos reais.
                 try:
                     os.link(fx.secret, os.path.join(root, "hardlink.txt"))
@@ -228,7 +239,7 @@ def run_synthetic(deps=None, timeout=L.DEFAULT_TIMEOUT):
                 else:
                     hardlink = _worker(deps, fx, root, "hardlink", timeout)
                     if hardlink is not None:
-                        n = hardlink.get("native_hardlink", {})
+                        n = _item(hardlink, "native_hardlink")
                         rep["native_hardlink_limitation"] = (
                             "NATIVE_HARDLINK_LEAK_REPRODUCED" if
                             n.get("opened") is True and n.get("matched") is True
