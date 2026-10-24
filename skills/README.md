@@ -1,6 +1,6 @@
-# Biblioteca de skills — GH-F2.0 (catálogo consultivo)
+# Biblioteca de skills — GH-F2.0 (catálogo) + GH-F2.1 (revisão de candidatas)
 
-**Status: proposta para revisão humana; nenhuma skill foi implantada por este PR.** O `catalog.json` é um inventário de candidatas, não uma coleção de contratos `SKILL.md` aprovados. Para adotar uma skill de verdade, será preciso criar `skills/<nome>/SKILL.md` e `contract.yaml` conforme o [contrato de skill](../docs/contratos/contrato-de-skill.md).
+**Status: GH-F2.0 integrada; GH-F2.1 em revisão em branch própria. Nenhuma skill foi implantada por estas entregas.** O `catalog.json` é um inventário de candidatas, não uma coleção de contratos `SKILL.md` aprovados. Para adotar uma skill de verdade, será preciso criar `skills/<nome>/SKILL.md` e `contract.yaml` conforme o [contrato de skill](../docs/contratos/contrato-de-skill.md).
 
 - Fonte neutra conforme [ADR-007](../docs/adr/ADR-007-arquitetura-de-diretorios.md). Nada é materializado em `.claude/` nesta etapa.
 - `reported-global` significa instalação **relatada no handoff de outro projeto**, não verificada no toolkit ou no host. O catálogo não desativa nem restringe plugins globais já instalados no Claude Code.
@@ -34,6 +34,13 @@ O coordenador futuro não usa este catálogo automaticamente. Permissões reais 
 | `management` | replica-entrepreneur, replica-brand, replica-launch | Pesquisa e plano, sem compras ou deploy |
 
 `motionmaxxing` é candidata para vídeo/mídia, mas Media Lab não foi criada como 13º agente. OpenViking, Google Artemis, Unsloth e CodeXR são **infraestruturas ou referências, não Agent Skills**, e ficam fora do roteamento.
+
+
+## Revisões pinadas e contratos propostos (GH-F2.1)
+
+A revisão preliminar de seis candidatas de UI/UX, Frontend e QA está registrada em [GH-F2-1-candidates.json](reviews/GH-F2-1-candidates.json), com commits/SHA, licenças observadas, riscos, dependências e **minutas de contrato**. O validador somente leitura `python3 scripts/validate_skill_reviews.py --json` e os testes `python3 -m unittest discover -s tests -p 'test_skill_reviews.py' -v` conferem restrições negativas. Não são `SKILL.md` ou `contract.yaml` instaláveis: são propostas ainda não aprovadas.
+
+Em especial: Impeccable pode obter binário e instalar hooks; Webapp Testing inclui helper `shell=True`; Web Design Guidelines consulta regras remotas mutáveis e não apresentou licença verificada no material revisado. Esses itens **não podem receber ativação automática**. Os níveis de risco no catálogo agora refletem esses achados. Nenhum código de terceiros foi copiado.
 
 ## Princípios de eficiência e adoção
 
