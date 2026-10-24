@@ -21,6 +21,7 @@ Status: planejamento; **GH-F0 a GH-F1.3 concluídas** (PRs #1 a #7 integrados na
 - GH-F1.1: contratos de agente, skill e tarefa em [contratos/](contratos/README.md) (concluída).
 - GH-F1.2: definições documentais dos três agentes em [../agents/](../agents/README.md) (concluída).
 - GH-F1.3: pesquisa em [pesquisas/](pesquisas/claude-code-materializacao-2026-10-22.md) e [ADR-010](adr/ADR-010-materializacao-em-claude-code.md) (proposta); GH-F1.7 (futura): [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md).
+- GH-F1.8 (provisório; proposta, documental): [ADR-011](adr/ADR-011-isolamento-do-processo.md), isolamento portátil do processo (srt/bubblewrap), `toolkit doctor` STRONG/ADVISORY/BLOCKED e executor de operações validadas, a implementar em `integrations/isolation/` só com autorização específica. Não substitui nem altera a GH-F1.5; a GH-F1.6 segue bloqueada.
 - Reserva de arquivos, worktrees e relato de evidências por tarefa (PDF-F2).
 - Desenhar e avaliar hooks (não ativar sem autorização) e simulação em repositório sandbox descartável (PDF-F1).
 - Definir a materialização em `.claude/` a partir da fonte neutra ([ADR-007](adr/ADR-007-arquitetura-de-diretorios.md)).
