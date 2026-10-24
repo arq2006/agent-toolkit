@@ -80,6 +80,38 @@ class ReadonlyExecutorTests(unittest.TestCase):
         self.assert_denied(b'{"op":"read","path":"inside.txt",}', "invalid_json")
         self.assert_denied(b'\xff\xfe', "invalid_json")
 
+    def test_json_surrogates_rejected_before_filesystem(self):
+        # JSON permite escapes Unicode sem par valido; no Arch/Linux,
+        # os.open normalmente lançaria UnicodeEncodeError.
+        for raw in (
+            b'{"op":"read","path":"\\ud800"}',
+            b'{"op":"list","path":"\\udfff"}',
+            b'{"op":"read","path":"sub/\\ud800/file.txt"}',
+        ):
+            self.assert_denied(raw, "invalid_path")
+        for path in ("\ud800", "\udfff", "sub/\ud800"):
+            with self.assertRaises(E.RequestDenied) as cm:
+                E.dispatch(self.fd, {"op": "read", "path": path})
+            self.assertEqual(str(cm.exception), "invalid_path")
+
+    def test_scan_streams_wide_tree_and_fails_closed(self):
+        for i in range(64):
+            os.mkdir(os.path.join(self.root, f"dir-{i:03d}"))
+        with mock.patch.object(pathguard.os, "listdir",
+                               side_effect=AssertionError("listdir materializou diretório")):
+            with mock.patch.object(E, "MAX_SCAN_ENTRIES", 10):
+                self.assert_denied(b'{"op":"read","path":"inside.txt"}', "path_denied")
+
+    def test_deep_tree_rejected_without_leaking_fd(self):
+        parent = self.root
+        for _ in range(65):
+            parent = os.path.join(parent, "d")
+            os.mkdir(parent)
+        before = len(os.listdir("/proc/self/fd")) if os.path.isdir("/proc/self/fd") else None
+        self.assert_denied(b'{"op":"read","path":"inside.txt"}', "path_denied")
+        if before is not None:
+            self.assertLessEqual(len(os.listdir("/proc/self/fd")), before + 2)
+
     def test_types_and_sizes_fail_closed(self):
         for raw in (b"", b"[]", b"null", b"true", b"1", b'{"op":12}',
                     b'{"op":"read","path":1}', b'{"op":"list","path":null}'):
