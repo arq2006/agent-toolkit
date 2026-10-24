@@ -52,6 +52,11 @@ class Report:
             self.add(cid, title, NOT_TESTED, reason)
 
 
+RUNTIME_TITLE = "Leitura mínima do runtime permite o sandbox iniciar (provado pelo canário positivo)"
+FAIL_CLOSED_IDS = (("fail_closed_missing_settings", "srt recusa política ausente (sem execução sem sandbox)"),
+                   ("fail_closed_invalid_settings", "srt recusa política inválida (sem execução sem sandbox)"))
+POLICY_REJECTION_MARK = "Refusing to run with the built-in defaults"  # mensagem do srt 0.0.81 (cli.js)
+
 CANARY_CHECKS = (
     ("canary_run", "Suíte de canários executou dentro do srt"),
     ("auth_read_write", "Leitura e escrita permitidas na pasta autorizada sintética"),
@@ -195,6 +200,40 @@ def _check_pathguard(rep, fx):
         os.close(root_fd)
 
 
+def _status(rep, cid):
+    return next((c["status"] for c in rep.checks if c["id"] == cid), None)
+
+
+def _diagnose_start_failure(deps, stderr):
+    """Diferencia helper fisicamente ausente de helper ocultado pelo sandbox (denyRead '/')."""
+    if "apply-seccomp" in stderr and "No such file" in stderr:
+        h = deps.get("apply-seccomp")
+        if h.path and os.path.exists(h.path):
+            return ("apply-seccomp existe fisicamente no host mas ficou OCULTO dentro do sandbox "
+                    "(não coberto por allowRead); ")
+        return "apply-seccomp AUSENTE fisicamente no host; "
+    return ""
+
+
+def _classify_fail_closed(fc, fx, kind, settings_path, positive_control):
+    """PASS só com (1) controle positivo funcional e (2) evidência ESPECÍFICA de que o srt rejeitou a
+    política (código 1 + mensagem de recusa citando o arquivo). Falha genérica (ex.: 127) não prova
+    rejeição de política e nunca é evidência de isolamento."""
+    if fc.ran or os.path.exists(fx.auth_write + "." + kind):
+        return FAIL, "o comando executou sem a política válida"
+    if fc.timed_out:
+        return NOT_TESTED, "timeout: sem evidência"
+    if fc.returncode in (None, 0):
+        return FAIL, "srt terminou com sucesso sem executar o canário"
+    specific = (fc.returncode == 1 and POLICY_REJECTION_MARK in fc.stderr_tail and settings_path in fc.stderr_tail)
+    if not specific:
+        return NOT_TESTED, (f"falha genérica (código {fc.returncode}) sem a mensagem de recusa de política do srt: "
+                            "não prova rejeição")
+    if not positive_control:
+        return NOT_TESTED, "recusa específica observada, mas sem controle positivo funcional do sandbox neste run"
+    return PASS, "srt recusou com a mensagem específica de política; controle positivo ok (não é evidência de isolamento)"
+
+
 def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
     rep = Report()
     plat = sys.platform
@@ -232,26 +271,26 @@ def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
     if deps is None and not blocking_so_far:
         deps = L.detect_dependencies()
     if deps is not None:
-        for name in ("srt", "node", "bwrap", "socat", "rg"):
+        for name in ("srt", "node", "bwrap", "socat", "rg", "apply-seccomp"):
             d = deps.get(name)
             rep.add(f"dep_{name}", f"Dependência {name}", PASS if d.ok else FAIL,
                     " ".join(x for x in (d.version, d.reason) if x) or "")
-    try:
-        reads = L.runtime_read_paths() if deps is not None else []
-        if deps is not None:
-            rep.add("runtime_reads", "Leitura mínima do runtime (justificada)", PASS, ", ".join(reads))
-    except L.LauncherError as e:
-        reads = []
-        rep.add("runtime_reads", "Leitura mínima do runtime (justificada)", FAIL, str(e))
+    reads = []
+    if deps is not None:
+        try:
+            reads = L.runtime_read_paths(deps)
+        except L.LauncherError as e:
+            rep.add("runtime_reads", RUNTIME_TITLE, FAIL, str(e))
 
     prereq_ok = (config is not None and not any(c["status"] == FAIL for c in rep.checks)
                  and deps is not None and deps.all_ok)
     all_ids = [("canary_run", dict(CANARY_CHECKS)["canary_run"])] + [c for c in CANARY_CHECKS if c[0] != "canary_run"]
-    fail_closed_ids = [("fail_closed_missing_settings", "srt recusa política ausente (sem execução sem sandbox)"),
-                       ("fail_closed_invalid_settings", "srt recusa política inválida (sem execução sem sandbox)")]
+    fail_closed_ids = list(FAIL_CLOSED_IDS)
     if not prereq_ok:
         rep.not_tested(all_ids + fail_closed_ids,
                        "pré-requisitos falharam (ver checks acima); nenhum canário foi executado")
+        if not any(c["id"] == "runtime_reads" for c in rep.checks):
+            rep.add("runtime_reads", RUNTIME_TITLE, NOT_TESTED, "o sandbox não foi iniciado")
         if config is not None and plat.startswith("linux"):
             with L.create_fixture() as fx:  # lógica do executor, sem sandbox
                 _check_pathguard(rep, fx)
@@ -276,7 +315,7 @@ def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
                 if not res.ran:
                     rep.add("canary_run", dict(CANARY_CHECKS)["canary_run"], FAIL,
                             f"{res.reason} (código={res.returncode}, timeout={res.timed_out}); "
-                            f"stderr: {res.stderr_tail[-400:]!r}")
+                            f"{_diagnose_start_failure(deps, res.stderr_tail)}stderr: {res.stderr_tail[-400:]!r}")
                     rep.not_tested([c for c in CANARY_CHECKS if c[0] != "canary_run"],
                                    "a suíte não executou: nada foi comprovado")
                 else:
@@ -288,14 +327,16 @@ def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
                     except L.LauncherError as e:
                         rep.add(cid, title, FAIL, str(e))
                         continue
-                    if fc.ran or os.path.exists(fx.auth_write + "." + kind):
-                        rep.add(cid, title, FAIL, "o comando executou sem a política válida")
-                    elif fc.timed_out:
-                        rep.add(cid, title, NOT_TESTED, "timeout: sem evidência")
-                    elif fc.returncode in (None, 0):
-                        rep.add(cid, title, FAIL, "srt terminou com sucesso sem executar o canário")
-                    else:
-                        rep.add(cid, title, PASS)
+                    path = (os.path.join(fx.root, "no-such-settings.json") if kind == "missing"
+                            else os.path.join(fx.root, "invalid-settings.json"))
+                    st, why = _classify_fail_closed(fc, fx, kind, path, _status(rep, "auth_read_write") == PASS)
+                    rep.add(cid, title, st, why)
+            ok = _status(rep, "auth_read_write") == PASS
+            if not any(c["id"] == "runtime_reads" for c in rep.checks):
+                rep.add("runtime_reads", RUNTIME_TITLE, PASS if ok else NOT_TESTED,
+                        ("controle positivo ok com: " + ", ".join(reads)) if ok else
+                        "caminhos declarados existem, mas o runtime não iniciou/controle positivo falhou: "
+                        "a existência dos caminhos não prova nada")
         finally:
             if prev is None:
                 os.environ.pop("TOOLKIT_DOCTOR_FAKE_SECRET", None)

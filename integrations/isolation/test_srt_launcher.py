@@ -5,6 +5,7 @@ isolamento. Canários reais ficam no doctor, quando bwrap/srt existem.
 Executar: python3 -I -m unittest discover -s integrations/isolation -p 'test_*.py'
 """
 import dataclasses
+import json
 import os
 import shutil
 import stat
@@ -74,12 +75,26 @@ class Settings(unittest.TestCase):
             self.assertNotIn(path, ("/", "/home", "/root", "/tmp", "/etc", "/var", "/proc", "/sys"))
 
     def test_runtime_reads_fail_closed(self):
+        deps = fakes.make_fake_deps(tempfile.gettempdir(), "validate")
         with mock.patch("os.path.isfile", return_value=False):
             with self.assertRaises(L.LauncherError):
-                L.runtime_read_paths()
+                L.runtime_read_paths(deps)
         with mock.patch("os.path.realpath", return_value="/opt/venv/bin/python3"):
             with self.assertRaises(L.LauncherError):
-                L.runtime_read_paths()
+                L.runtime_read_paths(deps)
+
+    def test_validate_settings_rejects_broad_or_extra_reads(self):
+        helper = "/home/u/.local/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp"
+        with L.create_fixture() as fx:
+            ok = L.build_settings(cfg(fx.authorized), ["/usr", helper])
+            self.assertIn(helper, ok["filesystem"]["allowRead"])
+            self.assertFalse(ok["network"]["allowAllUnixSockets"])  # seccomp/sockets Unix seguem bloqueados
+            for bad in (["/usr", "/home/u/.local"], ["/usr", "/home/u"], ["/usr", "~"],
+                        ["/usr", os.path.dirname(helper)], ["/usr", helper, helper.replace("x64", "arm64")],
+                        ["/usr", "/home/u/*/vendor/seccomp/x64/apply-seccomp"],
+                        ["/usr", "/home/u/.local/vendor/seccomp/x64/apply-seccomp.sh"]):
+                with self.assertRaises(L.LauncherError, msg=bad):
+                    L.build_settings(cfg(fx.authorized), bad)
 
 
 class Env(unittest.TestCase):
@@ -105,11 +120,40 @@ class Deps(unittest.TestCase):
         os.chmod(p, 0o755)
 
     def detect(self):
-        with mock.patch.dict(os.environ, {"PATH": self.tmp}):
+        with mock.patch.dict(os.environ, {"PATH": self.tmp}), mock.patch("platform.machine", return_value="x86_64"):
             return L.detect_dependencies()
 
+    def make_package(self, root=None, version=None, with_helper=True):
+        root = root or os.path.join(self.tmp, "lib", "node_modules", "@anthropic-ai", "sandbox-runtime")
+        os.makedirs(os.path.join(root, "dist"), exist_ok=True)
+        with open(os.path.join(root, "package.json"), "w") as f:
+            json.dump({"name": L.SRT_PACKAGE, "version": version or L.SUPPORTED_SRT_VERSION}, f)
+        cli = os.path.join(root, "dist", "cli.js")
+        with open(cli, "w") as f:
+            f.write(f"#!/bin/sh\necho '{L.SUPPORTED_SRT_VERSION}'\n")
+        os.chmod(cli, 0o755)
+        helper = os.path.join(root, "vendor", "seccomp", "x64", "apply-seccomp")
+        if with_helper:
+            os.makedirs(os.path.dirname(helper), exist_ok=True)
+            with open(helper, "wb") as f:
+                f.write(b"\x7fELF-fake")
+            os.chmod(helper, 0o755)
+        return root, cli, helper
+
+    def install_srt(self, **kw):
+        root, cli, helper = self.make_package(**kw)
+        link = os.path.join(self.tmp, "srt")
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(cli, link)
+        return root, cli, helper
+
+    def locate(self, cli):
+        with mock.patch("platform.machine", return_value="x86_64"):
+            return L.locate_seccomp_helper(cli)
+
     def all_ok(self):
-        self.exe("srt", L.SUPPORTED_SRT_VERSION)
+        self.install_srt()
         self.exe("node", "v22")
         self.exe("bwrap", "bubblewrap 0.12.0")
         self.exe("socat", "x")
@@ -119,6 +163,71 @@ class Deps(unittest.TestCase):
         self.all_ok()
         d = self.detect()
         self.assertTrue(d.all_ok, d)
+        self.assertTrue(d.get("apply-seccomp").path.endswith("vendor/seccomp/x64/apply-seccomp"))
+
+    def test_srt_outside_usr_helper_exact_path_only(self):
+        root, cli, helper = self.install_srt()
+        info = self.locate(cli)
+        self.assertTrue(info.ok, info)
+        self.assertEqual(info.path, os.path.realpath(helper))
+        reads = L.runtime_read_paths(L.Dependencies({"apply-seccomp": info}))
+        self.assertIn(info.path, reads)
+        for forbidden in (root, os.path.dirname(info.path), self.tmp, os.path.expanduser("~"), "/home"):
+            self.assertNotIn(forbidden, reads)
+        self.assertEqual(reads[-1], info.path)
+
+    def test_helper_physically_absent_is_distinguished(self):
+        _, cli, _ = self.install_srt(with_helper=False)
+        info = self.locate(cli)
+        self.assertFalse(info.ok)
+        self.assertIn("AUSENTE fisicamente", info.reason)
+        with self.assertRaises(L.LauncherError):
+            L.runtime_read_paths(L.Dependencies({"apply-seccomp": info}))
+
+    def test_helper_unsafe_variants_refused(self):
+        root, cli, helper = self.install_srt()
+        os.chmod(helper, 0o775)
+        self.assertFalse(self.locate(cli).ok)  # gravável por grupo
+        os.chmod(helper, 0o755)
+        real = helper + ".real"
+        os.rename(helper, real)
+        os.symlink(real, helper)
+        self.assertFalse(self.locate(cli).ok)  # symlink
+        os.remove(helper)
+        os.rename(real, helper)
+        os.link(helper, helper + ".hl")
+        self.assertFalse(self.locate(cli).ok)  # hardlink
+        os.remove(helper + ".hl")
+        self.assertTrue(self.locate(cli).ok)
+        os.chmod(os.path.dirname(helper), 0o777)
+        self.assertFalse(self.locate(cli).ok)  # ancestral gravável por outros (sem sticky)
+        os.chmod(os.path.dirname(helper), 0o755)
+        open(helper, "w").close()
+        self.assertFalse(self.locate(cli).ok)  # vazio
+
+    def test_helper_wrong_package_or_version_or_arch(self):
+        _, cli, _ = self.install_srt(version="0.0.82")
+        self.assertFalse(self.locate(cli).ok)
+        lone = os.path.join(self.tmp, "lonely")
+        os.mkdir(lone)
+        self.assertIn("não localizado", self.locate(os.path.join(lone, "cli.js")).reason)
+        _, cli, _ = self.install_srt()
+        with mock.patch("platform.machine", return_value="riscv64"):
+            self.assertFalse(L.locate_seccomp_helper(cli).ok)
+
+    def test_helper_glob_characters_in_path_refused(self):
+        base = os.path.join(self.tmp, "we*ird")
+        root, cli, _ = self.make_package(os.path.join(base, "pkg"))
+        info = self.locate(cli)
+        self.assertFalse(info.ok)
+        self.assertIn("caracteres", info.reason)
+
+    def test_srt_version_mismatch_means_no_helper(self):
+        self.all_ok()
+        self.exe("srt", "0.0.82")  # substitui o symlink por script com outra versão
+        d = self.detect()
+        self.assertFalse(d.get("srt").ok)
+        self.assertFalse(d.get("apply-seccomp").ok)
 
     def test_missing_everything(self):
         d = self.detect()
@@ -128,6 +237,7 @@ class Deps(unittest.TestCase):
 
     def test_srt_wrong_version(self):
         self.all_ok()
+        os.remove(os.path.join(self.tmp, "srt"))
         self.exe("srt", "0.0.82")
         d = self.detect()
         self.assertFalse(d.get("srt").ok)
@@ -135,6 +245,7 @@ class Deps(unittest.TestCase):
 
     def test_srt_version_failure(self):
         self.all_ok()
+        os.remove(os.path.join(self.tmp, "srt"))
         self.exe("srt", "", rc=1)
         self.assertFalse(self.detect().get("srt").ok)
 

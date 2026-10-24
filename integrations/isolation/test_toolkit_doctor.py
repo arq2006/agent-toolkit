@@ -98,7 +98,9 @@ class Failures(Base):
         rep = D.run_doctor(self.config(), deps=fakes.make_fake_deps(self.tmp, "crash"), timeout=20)
         self.assertEqual(self.status(rep, "canary_run"), D.FAIL)
         self.assertEqual(self.status(rep, "outside_read_blocked"), D.NOT_TESTED)
-        self.assertEqual(self.status(rep, "fail_closed_missing_settings"), D.PASS)  # srt recusou (rc!=0)
+        # falha genérica de runtime (rc=7) NÃO prova rejeição de política
+        self.assertEqual(self.status(rep, "fail_closed_missing_settings"), D.NOT_TESTED)
+        self.assertEqual(self.status(rep, "runtime_reads"), D.NOT_TESTED)
         self.assertNeverAuthorizes(rep)
         self.assertEqual(rep["exit_code"], 2)
 
@@ -107,6 +109,52 @@ class Failures(Base):
         self.assertEqual(self.status(rep, "canary_run"), D.FAIL)
         self.assertEqual(self.status(rep, "fail_closed_missing_settings"), D.NOT_TESTED)
         self.assertEqual(rep["summary"]["sandbox_canaries"], "FAILED")
+
+
+class Regression127(Base):
+    """Regressão do relatório real do Arch: srt 0.0.81 instalado fora de /usr, apply-seccomp oculto (127)."""
+
+    def test_exit127_is_not_fail_closed_evidence(self):
+        rep = D.run_doctor(self.config(), deps=fakes.make_fake_deps(self.tmp, "exit127"), timeout=20)
+        c = next(c for c in rep["checks"] if c["id"] == "canary_run")
+        self.assertEqual(c["status"], D.FAIL)
+        self.assertIn("AUSENTE fisicamente", c["reason"])  # caminho do fake não existe no host
+        for cid in ("fail_closed_missing_settings", "fail_closed_invalid_settings", "runtime_reads"):
+            self.assertEqual(self.status(rep, cid), D.NOT_TESTED, cid)
+        self.assertEqual(rep["summary"]["sandbox_canaries"], "FAILED")
+
+    def test_hidden_vs_absent_diagnosis(self):
+        helper = os.path.join(self.tmp, "vendor", "seccomp", "x64", "apply-seccomp")
+        os.makedirs(os.path.dirname(helper))
+        open(helper, "w").close()
+        err = f"bash: {helper}: No such file or directory"
+        deps = fakes.make_fake_deps(self.tmp, "validate")
+        items = dict(deps.items)
+        items["apply-seccomp"] = L.DepInfo("apply-seccomp", helper, "x64", True)
+        self.assertIn("OCULTO", D._diagnose_start_failure(L.Dependencies(items), err))
+        os.remove(helper)
+        self.assertIn("AUSENTE", D._diagnose_start_failure(L.Dependencies(items), err))
+        self.assertEqual(D._diagnose_start_failure(deps, "other error"), "")
+
+    def test_classify_fail_closed(self):
+        with L.create_fixture() as fx:
+            path = os.path.join(fx.root, "no-such-settings.json")
+            msg = f"Error: {path} does not exist.\nRefusing to run with the built-in defaults, x\n"
+            mk = lambda rc, err, ran=False, to=False: L.SuiteResult(ran, "", rc, to, {}, err)
+            cl = lambda r, ctl=True: D._classify_fail_closed(r, fx, "missing", path, ctl)[0]
+            self.assertEqual(cl(mk(1, msg)), D.PASS)
+            self.assertEqual(cl(mk(1, msg), ctl=False), D.NOT_TESTED)  # sem controle positivo
+            self.assertEqual(cl(mk(127, "No such file or directory")), D.NOT_TESTED)  # genérica
+            self.assertEqual(cl(mk(1, "Refusing to run with the built-in defaults")), D.NOT_TESTED)  # sem o arquivo
+            self.assertEqual(cl(mk(1, "x", to=True)), D.NOT_TESTED)
+            self.assertEqual(cl(mk(0, "")), D.FAIL)
+            self.assertEqual(cl(mk(0, msg, ran=True)), D.FAIL)
+
+    def test_runtime_reads_pass_requires_working_sandbox(self):
+        rep = D.run_doctor(self.config(), deps=fakes.make_fake_deps(self.tmp, "validate_noop"), timeout=30)
+        self.assertEqual(self.status(rep, "runtime_reads"), D.PASS)  # controle positivo funcionou
+        rep = D.run_doctor(self.config(), deps=fakes.make_fake_deps(self.tmp, "exit127"), timeout=20)
+        self.assertEqual(self.status(rep, "runtime_reads"), D.NOT_TESTED)
 
 
 class FakeNoopSandbox(Base):

@@ -13,10 +13,12 @@ haver validação específica). O resultado de um canário NÃO autoriza executa
 """
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
 import signal
+import stat
 import socket
 import subprocess
 import sys
@@ -46,6 +48,15 @@ RUNTIME_READ_NON_USRMERGE = (
     ("/bin", "bash em distros sem usr-merge"),
     ("/sbin", "binários em distros sem usr-merge"),
 )
+
+# Componente interno do srt 0.0.81 que roda DENTRO do sandbox (static ELF que aplica o filtro seccomp
+# contra sockets Unix). Fica no pacote do srt, que pode estar fora de /usr (ex.: ~/.local/lib/node_modules),
+# e denyRead "/" o ocultaria (exit 127). Libera-se SOMENTE esse arquivo, por caminho exato validado;
+# nunca o pacote, nem ~/.local, nem /home. seccomp permanece ativo (allowAllUnixSockets = false).
+SRT_PACKAGE = "@anthropic-ai/sandbox-runtime"
+SECCOMP_ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
+SECCOMP_RE = re.compile(r"(/[^/\x00*?\[\]{}~]+)+/vendor/seccomp/(x64|arm64)/apply-seccomp")
+MAX_HELPER_BYTES = 8 * 1024 * 1024
 
 # Ambiente do processo isolado: construído do zero (lista fechada), nunca herdado.
 ENV_ALLOWED = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE", "TMPDIR")
@@ -77,7 +88,7 @@ class Dependencies:
         return all(d.ok for d in self.items.values())
 
     def get(self, name):
-        return self.items[name]
+        return self.items.get(name) or DepInfo(name, "", "", False, "não detectado")
 
 
 def _plain_env(extra_path_dirs=()):
@@ -109,6 +120,73 @@ def _find(name):
     return p
 
 
+def _safe_owner_and_mode(st, what):
+    if st.st_uid not in (0, os.getuid()):
+        return f"{what}: dono inesperado"
+    if st.st_mode & 0o022:
+        return f"{what}: gravável por grupo/outros"
+    return ""
+
+
+def locate_seccomp_helper(srt_real_path):
+    """Localiza e valida o apply-seccomp do pacote do srt 0.0.81. Distingue 'fisicamente ausente'
+    (pacote incompleto) de 'presente'; a visibilidade dentro do sandbox é provada só pelo canário.
+    Devolve DepInfo com o caminho EXATO do arquivo (sem symlinks) quando seguro."""
+    name = "apply-seccomp"
+    arch = SECCOMP_ARCH.get(platform.machine().lower())
+    if not arch:
+        return DepInfo(name, "", "", False, f"arquitetura {platform.machine()!r} sem helper seccomp suportado")
+    root = ""
+    cur = os.path.dirname(srt_real_path)
+    for _ in range(6):
+        pj = os.path.join(cur, "package.json")
+        try:
+            if os.path.getsize(pj) <= 65_536:
+                with open(pj, encoding="utf-8") as f:
+                    meta = json.load(f)
+                if isinstance(meta, dict) and meta.get("name") == SRT_PACKAGE:
+                    if meta.get("version") != SUPPORTED_SRT_VERSION:
+                        return DepInfo(name, "", "", False, "package.json do srt com versão diferente da suportada")
+                    root = cur
+                    break
+        except (OSError, ValueError):
+            pass
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    if not root:
+        return DepInfo(name, "", "", False, "pacote do srt não localizado a partir do executável")
+    path = os.path.join(root, "vendor", "seccomp", arch, "apply-seccomp")
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return DepInfo(name, path, "", False,
+                       "AUSENTE fisicamente no pacote do srt (instalação incompleta; não é ocultação do sandbox)")
+    except OSError as e:
+        return DepInfo(name, path, "", False, f"não inspecionável: {e.strerror}")
+    if not stat.S_ISREG(st.st_mode):
+        return DepInfo(name, path, "", False, "não é arquivo regular (symlink/outro tipo recusado)")
+    if os.path.realpath(path) != path:
+        return DepInfo(name, path, "", False, "caminho passa por symlink: recusado")
+    if not (0 < st.st_size <= MAX_HELPER_BYTES) or not os.access(path, os.X_OK):
+        return DepInfo(name, path, "", False, "tamanho inválido ou sem permissão de execução")
+    if st.st_nlink != 1:
+        return DepInfo(name, path, "", False, "arquivo com mais de um link físico")
+    bad = _safe_owner_and_mode(st, "apply-seccomp")
+    if bad:
+        return DepInfo(name, path, "", False, bad)
+    if not SECCOMP_RE.fullmatch(path):
+        return DepInfo(name, path, "", False, "caminho com caracteres não permitidos (glob/~)")
+    anc = os.path.dirname(path)
+    while anc != "/":
+        ast = os.stat(anc)
+        if ast.st_uid not in (0, os.getuid()) or (ast.st_mode & 0o022 and not ast.st_mode & stat.S_ISVTX):
+            return DepInfo(name, path, "", False, f"diretório ancestral inseguro: {anc}")
+        anc = os.path.dirname(anc)
+    return DepInfo(name, path, arch, True, "leitura liberada somente para este arquivo exato")
+
+
 def detect_dependencies():
     """Detecta (sem instalar) srt, node, bubblewrap, socat e ripgrep. Versão do srt exata; do
     bubblewrap, mínima. Qualquer item ausente ou incompatível fica ok=False com o motivo."""
@@ -132,6 +210,10 @@ def detect_dependencies():
                                  f"versão incompatível: suportada exatamente {SUPPORTED_SRT_VERSION}")
         else:
             out["srt"] = DepInfo("srt", p, v, True)
+    if out["srt"].ok:
+        out["apply-seccomp"] = locate_seccomp_helper(found["srt"])
+    else:
+        out["apply-seccomp"] = DepInfo("apply-seccomp", "", "", False, "srt indisponível: helper não localizado")
     p = found["bwrap"]
     if not p:
         out["bwrap"] = DepInfo("bwrap", "", "", False, "não encontrado no PATH")
@@ -150,8 +232,12 @@ def detect_dependencies():
     return Dependencies(out)
 
 
-def runtime_read_paths():
-    """Lista mínima de leituras do runtime; recusa se o interpretador fixo estiver fora de /usr."""
+def runtime_read_paths(deps):
+    """Lista mínima de leituras do runtime, mais o apply-seccomp exato do srt; recusa se o
+    interpretador fixo estiver fora de /usr ou se o helper não for seguro/ausente."""
+    helper = deps.get("apply-seccomp")
+    if not helper.ok:
+        raise LauncherError(f"apply-seccomp indisponível: {helper.reason}")
     if not os.path.isfile(INTERPRETER) or not os.access(INTERPRETER, os.X_OK):
         raise LauncherError(f"interpretador {INTERPRETER} ausente: runtime mínimo indisponível")
     real = os.path.realpath(INTERPRETER)
@@ -163,6 +249,7 @@ def runtime_read_paths():
     for p, _ in RUNTIME_READ_NON_USRMERGE:
         if os.path.isdir(p) and not os.path.islink(p):
             paths.append(p)
+    paths.append(helper.path)
     return paths
 
 
@@ -198,6 +285,10 @@ def validate_settings(s, adir, runtime_reads):
     if (set(f) != {"denyRead", "allowRead", "allowWrite", "denyWrite"} or f["denyRead"] != ["/"]
             or f["allowWrite"] != [adir] or f["allowRead"] != [adir, *runtime_reads] or f["denyWrite"] != []):
         raise LauncherError("política de arquivos não é a restritiva esperada")
+    seccomp = [r for r in runtime_reads if SECCOMP_RE.fullmatch(r)]
+    allowed = {p for p, _ in RUNTIME_READ + RUNTIME_READ_NON_USRMERGE}
+    if len(seccomp) > 1 or any(r not in allowed and r not in seccomp for r in runtime_reads):
+        raise LauncherError("leitura de runtime fora da lista mínima justificada")
     if s["enableWeakerNestedSandbox"] is not False or s["allowNestedUserNamespaces"] is not False:
         raise LauncherError("política enfraquece o sandbox")
 
@@ -439,7 +530,8 @@ def _spawn(argv, env, cwd, timeout):
 
 def _execute(deps, fx, settings_path, ops, timeout):
     srt, node = deps.get("srt"), deps.get("node")
-    if not (srt.ok and deps.get("bwrap").ok and deps.get("socat").ok and deps.get("rg").ok and node.ok):
+    if not (srt.ok and deps.get("bwrap").ok and deps.get("socat").ok and deps.get("rg").ok and node.ok
+            and deps.get("apply-seccomp").ok):
         raise LauncherError("dependências ausentes ou incompatíveis: execução recusada")
     nonce = secrets.token_hex(8)
     payload = json.dumps({"nonce": nonce, "ops": ops}, separators=(",", ":"))
@@ -447,7 +539,7 @@ def _execute(deps, fx, settings_path, ops, timeout):
     env = build_env(fx, sorted(dirs))
     argv = [srt.path, "--settings", settings_path, "--", INTERPRETER, "-I", "-c", PROBE_SRC, payload]
     rc, out, err, timed_out = _spawn(argv, env, fx.authorized, timeout)
-    tail = err.decode("utf-8", "replace")[-600:]
+    tail = err.decode("utf-8", "replace")[-1500:]
     if timed_out:
         return SuiteResult(False, "timeout: processo encerrado", rc, True, {}, tail)
     parsed = None
@@ -476,7 +568,7 @@ def run_suite(deps, config, fx, tcp_loopback=None, tcp_external=None, host_pid=N
     recusa se a pasta autorizada da config não for a do fixture sintético."""
     if config.authorized_dir != fx.authorized:
         raise LauncherRefused("PR3: somente o fixture sintético pode ser usado; pasta real recusada")
-    reads = runtime_read_paths()
+    reads = runtime_read_paths(deps)
     settings = build_settings(config, reads)
     _write_settings(fx, settings)
     with open(fx.settings_path, encoding="utf-8") as f:

@@ -11,11 +11,19 @@ a = sys.argv[1:]
 mode = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mode")).read().strip()
 if len(a) < 4 or a[0] != "--settings" or a[2] != "--":
     sys.exit(9)
-if mode in ("validate", "validate_noop") :
+if mode == "exit127":
+    sys.stderr.write("/usr/bin/bash: line 21: /x/vendor/seccomp/x64/apply-seccomp: No such file or directory\\n")
+    sys.exit(127)
+if mode in ("validate", "validate_noop"):
+    if not os.path.exists(a[1]):
+        sys.stderr.write("Error: %s does not exist.\\n" % a[1])
+        sys.stderr.write("Refusing to run with the built-in defaults, which would drop the rules --settings asked for.\\n")
+        sys.exit(1)
     try:
         json.load(open(a[1]))
     except Exception:
-        sys.stderr.write("settings invalid or missing\\n")
+        sys.stderr.write("Error: %s invalid\\n" % a[1])
+        sys.stderr.write("Refusing to run with the built-in defaults, which would drop this file's rules.\\n")
         sys.exit(1)
 if mode == "crash":
     sys.exit(7)
@@ -39,4 +47,5 @@ def make_fake_deps(tmpdir, mode):
     ok = lambda n, p: L.DepInfo(n, p, "x", True)
     return L.Dependencies({"srt": ok("srt", srt), "node": ok("node", "/usr/bin/env"),
                            "bwrap": ok("bwrap", "/usr/bin/env"), "socat": ok("socat", "/usr/bin/env"),
-                           "rg": ok("rg", "/usr/bin/env")})
+                           "rg": ok("rg", "/usr/bin/env"),
+                           "apply-seccomp": ok("apply-seccomp", "/opt/fake/srt/vendor/seccomp/x64/apply-seccomp")})
