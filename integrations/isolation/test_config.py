@@ -94,9 +94,21 @@ class Invalid(Base):
             pass
         home = os.path.realpath(P.account_home())
         for adir in ["relativo/x", "/", self.d + "/../pasta", self.d + "/", link, f,
-                     os.path.join(self.tmp, "inexistente"), home, os.path.dirname(home), "", "/a\\x00b"]:
+                     os.path.join(self.tmp, "inexistente"), home, os.path.dirname(home), ""]:
             self.bad(self.toml(adir=adir))
         self.bad(self.toml().replace(f'"{self.d}"', "42"))
+
+    def test_authorized_dir_with_real_nul_refused_for_nul(self):
+        # \u0000 no TOML vira NUL verdadeiro após o parse; a recusa deve ser pelo NUL,
+        # não por caminho inexistente ou TOML inválido.
+        text = self.toml(adir=self.d + "/a\\u0000b")
+        self.assertIn("\\u0000", text)
+        with self.assertRaises(C.ConfigError) as cm:
+            C.parse(text)
+        self.assertIn("caminho textual válido", str(cm.exception))
+        with self.assertRaises(C.ConfigError) as cm:
+            C._check_authorized_dir(self.d + "/a\x00b")
+        self.assertIn("caminho textual válido", str(cm.exception))
 
     def test_auth_and_network(self):
         self.bad(self.toml(auth="full"))

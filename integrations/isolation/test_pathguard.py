@@ -144,6 +144,22 @@ class Root(Base):
             with self.assertRaises(P.PathGuardError, msg=repr(bad)):
                 P.open_root(bad)
 
+    def test_nul_refused_for_nul(self):
+        # caminhos absolutos e existentes até o NUL: a recusa só pode ser pelo NUL
+        with self.assertRaises(P.PathGuardError) as cm:
+            P.open_root(self.root + "\x00/x")
+        self.assertIn("caminho textual válido", str(cm.exception))
+        with self.assertRaises(P.PathGuardError) as cm:
+            P.check_authorized_path(self.root + "\x00")
+        self.assertIn("caminho textual válido", str(cm.exception))
+        with self.assertRaises(P.PathGuardError) as cm:
+            P.read_bytes(self.fd, "a.txt\x00")
+        self.assertIn("NUL", str(cm.exception))
+        with self.assertRaises(P.PathGuardError) as cm:
+            P.write_bytes(self.fd, "sub/n\x00.txt", b"x")
+        self.assertIn("NUL", str(cm.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "sub", "n")))
+
     def test_root_slash_and_unnormalized_refused(self):
         for bad in ["/", "//", "//x", self.root + "/", self.root + "//", self.root + "/.",
                     self.root + "/./", "/" + "a" * 300, ""]:
