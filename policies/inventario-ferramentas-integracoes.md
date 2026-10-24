@@ -54,5 +54,21 @@ Status: **documento de política (GH-F0, origem PDF-F0)**, criado em 22/10/2026.
 | R-04 | `ctresb/leis` | Consulta e indexação | acervo informativo; não é fonte oficial nem skill jurídica |
 | R-05 | Repositórios Hermes e FreeLLMAPI | Pesquisa | não executar nem copiar sem avaliação de segurança, licença e utilidade |
 
+
+## GH-F2.1 — Candidatas de UI/UX, Frontend e QA (24/10/2026)
+
+**Nenhuma ferramenta nesta tabela foi instalada, executada ou habilitada pelo toolkit.** `reported-global` em `skills/catalog.json` representa somente relato de instalação prévia em outro projeto; não confirma versão ou integridade no Arch. Evidências e minutas em [GH-F2-1-candidates.json](../skills/reviews/GH-F2-1-candidates.json). Todos os estados abaixo são `candidata` para adoção **pelo toolkit**.
+
+| ID | Skill ou plugin | Origem | Licença observada | Estado | Risco | Restrição para adoção |
+|---|---|---|---|---|---|---|
+| T-30 | Impeccable | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) | Apache-2.0 (LICENSE) | candidata | alto | Launcher pode obter binário; instalação pode configurar hooks; revisar código e instalação local antes de uso |
+| T-31 | Replica Design | [Jakeschincariol/replica-skill](https://github.com/Jakeschincariol/replica-skill) | MIT (LICENSE) | candidata | médio | Geração/escrita de tokens/componentes, arquivos reservados e referências com direitos verificados |
+| T-32 | Frontend Design | [anthropics/skills](https://github.com/anthropics/skills) | Apache-2.0 (LICENSE.txt) | candidata | baixo | Sobrepõe direção estética ao Impeccable; sem carregamento simultâneo por padrão |
+| T-33 | Web Design Guidelines | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | **não verificada** | candidata | médio | Skill solicita WebFetch de regras mutáveis; exigir revisão de licença, pin e rejeitar rede dinâmica |
+| T-34 | Vercel React Best Practices | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) | MIT declarado no SKILL.md; comprovação documental pendente | candidata | baixo | Revisar regras específicas; alterações React apenas com escopo autorizado |
+| T-35 | Webapp Testing | [anthropics/skills](https://github.com/anthropics/skills) | Apache-2.0 (LICENSE.txt) | candidata | alto | Helper usa `subprocess.Popen(shell=True)`; não executar scripts/servidores fora de ambiente isolado aprovado |
+
+Antes de adotar qualquer item: conferir commit/SHA fixado no manifesto, **revisar scripts, binários, hooks, dependências e licença**, testar em ambiente descartável e registrar aprovação separada para instalação, execução, escrita, rede e recursos A3. `T-12` continua sendo a categoria genérica; os IDs T-30–T-35 são inventário específico, não permissões novas.
+
 ## Manutenção
 Revisar o inventário a cada nova fase e ao adotar qualquer ferramenta. Cada mudança registra: ID, procedência, licença, versão fixada, permissões, quem aprovou e data. Ferramentas removidas permanecem listadas como `retirada`, com o motivo.

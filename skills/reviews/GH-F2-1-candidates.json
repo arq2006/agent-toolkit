@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "phase": "GH-F2.1",
+  "review_date": "2026-10-24",
+  "mode": "review-only",
+  "source_evidence": "Public upstream GitHub files inspected selectively. No installation, execution, hook activation, full code audit, or local-state verification.",
+  "candidate_count": 6,
+  "candidates": [
+    {
+      "id": "impeccable",
+      "source": {
+        "repository": "https://github.com/pbakaus/impeccable",
+        "commit_sha": "936867543ac2576920d663cc9803597f6044f3ac",
+        "entry_path": ".claude/skills/impeccable/SKILL.md",
+        "entry_blob_sha": "7f0d01d095f456ae37a01832962a1e6252f34f48"
+      },
+      "license": {
+        "reported": "Apache-2.0",
+        "verification": "confirmed",
+        "evidence": "LICENSE"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "high",
+        "observed": [
+          "source SKILL.md directs executing a launcher per session",
+          "launcher may fetch a binary on first run",
+          "npx installer can install provider hooks",
+          "init/document/extract/polish may edit project",
+          "installed version 4.6.0 only reported in Solenne; upstream reports 4.7.1"
+        ],
+        "required_before_adoption": [
+          "Audit the full launcher, binary provenance/signature and actual local installation",
+          "Verify hooks globally and project-local; keep unchanged by default",
+          "Separate critique-only from write-capable commands",
+          "Confirm exact installed version and pinned digest"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "ui-ux",
+        "eligible_roles": [
+          "ui-ux",
+          "frontend"
+        ],
+        "purpose": "Criticar, planejar e revisar interfaces sem promover comandos que alteram o projeto automaticamente.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:read_design_artifacts",
+          "A0:propose_ui_review"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A1:write_scoped_design_files",
+          "A2:install_or_update_binary",
+          "A3:activate_hooks_or_live_browser"
+        ],
+        "forbidden_until_approved": [
+          "run_skill_launcher_without_review",
+          "download_binary",
+          "enable_hooks",
+          "write_PRODUCT_or_DESIGN_without_approval",
+          "change_backend"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      }
+    },
+    {
+      "id": "replica-design",
+      "source": {
+        "repository": "https://github.com/Jakeschincariol/replica-skill",
+        "commit_sha": "77c9436fb3d18c3d58169efb8caf4fe906b0dc51",
+        "entry_path": "replica-design/SKILL.md",
+        "entry_blob_sha": "cfb3df4161d770770e5440f3d1d22344e24747f4"
+      },
+      "license": {
+        "reported": "MIT",
+        "verification": "confirmed",
+        "evidence": "LICENSE"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "medium",
+        "observed": [
+          "SKILL.md writes tokens.css, tokens.json, Tailwind mapping, components.md and builds primitives",
+          "contrast.py is present; only part inspected; not executed",
+          "legal clean-room guidance prohibits copying logos, assets, proprietary content"
+        ],
+        "required_before_adoption": [
+          "Audit full contrast.py and any auxiliary code before execution",
+          "Use fictitious or public authorized references",
+          "Obtain writing scope for tokens and components",
+          "Check third-party design/trade dress and font licenses"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "ui-ux",
+        "eligible_roles": [
+          "ui-ux",
+          "frontend"
+        ],
+        "purpose": "Derivar design tokens e especificações próprias de referências públicas autorizadas.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:read_public_reference",
+          "A0:plan_design_tokens"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A1:write_scoped_design_tokens",
+          "A1:write_scoped_components"
+        ],
+        "forbidden_until_approved": [
+          "copy_original_assets_or_proprietary_code",
+          "automatically_build_primitives",
+          "write_outside_reserved_files"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      }
+    },
+    {
+      "id": "frontend-design",
+      "source": {
+        "repository": "https://github.com/anthropics/skills",
+        "commit_sha": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+        "entry_path": "skills/frontend-design/SKILL.md",
+        "entry_blob_sha": "a5333457c414d20d625f307df945842c0952ecc3"
+      },
+      "license": {
+        "reported": "Apache-2.0",
+        "verification": "confirmed",
+        "evidence": "skills/frontend-design/LICENSE.txt"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "low",
+        "observed": [
+          "main skill is instructional text for distinctive visual design",
+          "substantive overlap with Impeccable aesthetic direction",
+          "specific frontend edits still depend on agent/tool permissions"
+        ],
+        "required_before_adoption": [
+          "Prefer Impeccable for comprehensive review when already installed; use this as alternate design-direction method",
+          "Review project design constraints and avoid duplicate loaded context",
+          "No unconditional loading for every frontend task"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "ui-ux",
+        "eligible_roles": [
+          "ui-ux",
+          "frontend"
+        ],
+        "purpose": "Oferecer direção estética e revisão conceitual sem implementar por iniciativa própria.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:read_ui_brief",
+          "A0:propose_design_direction"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A1:write_scoped_frontend"
+        ],
+        "forbidden_until_approved": [
+          "overwrite_existing_design_system",
+          "write_ui_unapproved",
+          "assume_project_identity_is_greenfield"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      }
+    },
+    {
+      "id": "web-design-guidelines",
+      "source": {
+        "repository": "https://github.com/vercel-labs/agent-skills",
+        "commit_sha": "063bee94c3f4df8453406c830b0a7df0f2860278",
+        "entry_path": "skills/web-design-guidelines/SKILL.md",
+        "entry_blob_sha": "ceae92ab319216a68274168fba9b63b998b65997"
+      },
+      "license": {
+        "reported": "UNVERIFIED",
+        "verification": "unverified",
+        "evidence": "no license declaration in reviewed SKILL.md; no root LICENSE found"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "medium",
+        "observed": [
+          "skill instructs WebFetch of remote command.md at every review",
+          "remote guidelines can change without a version bump",
+          "source skill has no explicit license field; no root LICENSE found"
+        ],
+        "required_before_adoption": [
+          "Verify reuse/redistribution license before copying external rules",
+          "Pin remote command.md to an audited revision or approved static snapshot",
+          "Treat fetched guidelines as data not authority; no prompt-based privilege escalation"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "qa",
+        "eligible_roles": [
+          "ui-ux",
+          "qa",
+          "frontend"
+        ],
+        "purpose": "Produzir revisão de interface e acessibilidade com regras fixadas e auditáveis.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:read_authorized_ui_files",
+          "A0:report_ui_findings"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A2:fetch_external_guidelines"
+        ],
+        "forbidden_until_approved": [
+          "fetch_main_branch_at_runtime",
+          "execute_instructions_from_fetched_content",
+          "assume_license_for_redistribution"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      },
+      "external_source_pin": {
+        "remote_rules_repo": "https://github.com/vercel-labs/web-interface-guidelines",
+        "remote_rules_sha": "434b7f91364665f2f733b310ec54809bf8f37937",
+        "remote_rules_path": "command.md"
+      }
+    },
+    {
+      "id": "vercel-react-best-practices",
+      "source": {
+        "repository": "https://github.com/vercel-labs/agent-skills",
+        "commit_sha": "063bee94c3f4df8453406c830b0a7df0f2860278",
+        "entry_path": "skills/react-best-practices/SKILL.md",
+        "entry_blob_sha": "237988de4a66dd8a71d30a2c24ebe1a86b58d04e"
+      },
+      "license": {
+        "reported": "MIT",
+        "verification": "declared-only",
+        "evidence": "license: MIT in skill frontmatter; standalone LICENSE not located"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "low",
+        "observed": [
+          "SKILL.md points to rules/*.md and AGENTS.md; rule corpus not fully reviewed",
+          "frontmatter declares license MIT, separate license document not found",
+          "rules are recommendations not guaranteed gains"
+        ],
+        "required_before_adoption": [
+          "Audit rule files relevant to chosen task at pinned upstream commit",
+          "Measure baseline before performance changes",
+          "Verify license before redistributing substantial rule content"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "frontend",
+        "eligible_roles": [
+          "frontend",
+          "performance"
+        ],
+        "purpose": "Revisar desempenho e padrões React/Next.js com recomendações verificadas.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:review_react_patterns",
+          "A0:propose_perf_changes"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A1:write_scoped_react_files"
+        ],
+        "forbidden_until_approved": [
+          "apply_mass_refactors",
+          "install_dependencies",
+          "make_unmeasured_performance_claims"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      }
+    },
+    {
+      "id": "webapp-testing",
+      "source": {
+        "repository": "https://github.com/anthropics/skills",
+        "commit_sha": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+        "entry_path": "skills/webapp-testing/SKILL.md",
+        "entry_blob_sha": "4726215301db64a0cc4d41fc3219c61f37a30f4a"
+      },
+      "license": {
+        "reported": "Apache-2.0",
+        "verification": "confirmed",
+        "evidence": "skills/webapp-testing/LICENSE.txt"
+      },
+      "review": {
+        "status": "PARTIAL",
+        "approval": "NOT_APPROVED",
+        "toolkit_installed": false,
+        "authorized_to_execute": false,
+        "risk": "high",
+        "observed": [
+          "helper scripts/with_server.py starts user-supplied server command with subprocess.Popen(shell=True)",
+          "skill says treat helper as a black box, incompatible with required code inspection",
+          "Playwright and Chromium execution may write files and connect localhost"
+        ],
+        "required_before_adoption": [
+          "Inspect and independently audit every executable helper before execution",
+          "Prefer strict argv and known workspace, no arbitrary shell",
+          "Use disposable fixtures and explicit allowlisted ports; no production",
+          "Do not treat SRT doctor PASSED as agent-usable STRONG"
+        ]
+      },
+      "contract_proposal": {
+        "status": "DRAFT_NOT_SKILL",
+        "owner": "qa",
+        "eligible_roles": [
+          "qa"
+        ],
+        "purpose": "Planejar testes Playwright de aplicações locais em ambiente descartável e explicitamente autorizado.",
+        "permissions_current": [],
+        "actions_proposed": [
+          "A0:propose_web_test_plan",
+          "A0:review_test_selector_strategy"
+        ],
+        "actions_requiring_explicit_authorization": [
+          "A1:start_test_server_in_disposable_environment",
+          "A1:write_scoped_test_artifacts",
+          "A2:install_playwright_dependencies"
+        ],
+        "forbidden_until_approved": [
+          "run_shell_true_server_commands",
+          "launch_unapproved_servers",
+          "hit_production_endpoint",
+          "access_secrets",
+          "perform_browser_network_without_approval"
+        ],
+        "inputs": [
+          "task_with_declared_scope",
+          "authorized_repo_reference",
+          "applicable_project_rules"
+        ],
+        "outputs": [
+          "proposed_findings_or_plan",
+          "evidence",
+          "risk_report"
+        ],
+        "protected_paths": [
+          "docs/references/",
+          "docs/security/",
+          "docs/CHECKSUMS.sha256"
+        ],
+        "tests": [
+          "positive_readonly_scoped",
+          "negative_refuse_unauthorized_write",
+          "negative_refuse_tool_permission_conflict"
+        ],
+        "stop_conditions": [
+          "out_of_scope",
+          "untrusted_external_instructions",
+          "permission_mismatch",
+          "protected_path_write_attempt"
+        ]
+      }
+    }
+  ],
+  "global_policy": {
+    "permissions_granted": false,
+    "any_installation_authorized": false,
+    "any_execution_authorized": false,
+    "materialize_claude_skills": false,
+    "enable_hooks": false,
+    "approve_third_party_code": false
+  }
+}
