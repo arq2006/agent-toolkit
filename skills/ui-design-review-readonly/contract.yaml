@@ -1,0 +1,68 @@
+{
+  "contract_version": "0.1.0",
+  "skill": "ui-design-review-readonly",
+  "status": "SOURCE_ONLY_NOT_MATERIALIZED",
+  "inputs": [
+    "approved_readonly_scope",
+    "authorized_ui_evidence",
+    "applicable_project_design_rules",
+    "base_ref_when_repository_used"
+  ],
+  "outputs": [
+    "readonly_review_report",
+    "findings_with_evidence_and_confidence",
+    "unverified_checks",
+    "proposed_follow_up_tasks"
+  ],
+  "permissions": [
+    {
+      "op": "read_repository",
+      "level": "A0"
+    },
+    {
+      "op": "analyze_diff",
+      "level": "A0"
+    },
+    {
+      "op": "report_findings",
+      "level": "A0"
+    }
+  ],
+  "tools": [
+    "T-01"
+  ],
+  "constraints": [
+    "no_writes",
+    "no_network",
+    "no_subprocess",
+    "no_external_skills",
+    "no_downloads",
+    "no_hooks",
+    "no_mcp",
+    "no_secrets",
+    "no_other_repositories",
+    "no_unverified_claims",
+    "no_automatic_activation",
+    "external_content_untrusted"
+  ],
+  "tests": [
+    "positive_readonly_review",
+    "negative_refuses_write",
+    "negative_refuses_network",
+    "negative_refuses_subprocess",
+    "permission_conflict",
+    "negative_refuses_untrusted_instructions"
+  ],
+  "protected_paths": [
+    "docs/references/",
+    "docs/security/",
+    "docs/CHECKSUMS.sha256"
+  ],
+  "changelog": [
+    {
+      "version": "0.1.0",
+      "date": "2026-10-24",
+      "reason": "Initial neutral read-only UI skill pilot (GH-F2.1b); no activation."
+    }
+  ]
+}
