@@ -130,6 +130,38 @@ class SyntheticPilotTests(unittest.TestCase):
         broken["hardlink_denied"] = {"ok": True}
         self.assertTrue(any(c["status"] == "FAIL" for c in P.classify(baseline, broken, "fictional")))
 
+    def test_malformed_canary_results_fail_closed(self):
+        bads = (
+            {"read_inside": None, "list_inside": True},
+            {"read_inside": {"ok": True, "response": "not-a-dict"},
+             "list_inside": {"ok": True, "response": 123}},
+            {"read_inside": {"ok": True, "response": {"ok": True, "op": "read", "text": "x"}},
+             "list_inside": {"ok": True, "response": {"entries": "wrong-type"}}},
+        )
+        for baseline in bads:
+            checks = P.classify(baseline, {"hardlink_denied": None,
+                        "normal_read_denied_with_hardlink": 123, "native_hardlink": []}, "x")
+            self.assertTrue(any(c["status"] == "FAIL" for c in checks))
+
+    def test_native_hardlink_inconsistent_fails_closed(self):
+        baseline = {
+            "read_inside": {"ok": True, "response": {"ok": True, "op": "read", "text": "x"}},
+            "list_inside": {"ok": True, "response": {"entries": [
+                "sample.txt", "pathguard.py", "readonly_executor.py"]}},
+            "reject_traversal": {"ok": False, "code": "invalid_path"},
+            "reject_absolute": {"ok": False, "code": "invalid_path"},
+            "reject_write_request": {"ok": False, "code": "operation_denied"},
+            "native_external_read": {"opened": False},
+            "native_write_denied": True,
+        }
+        hardlink = {
+            "hardlink_denied": {"ok": False, "code": "unsafe_tree"},
+            "normal_read_denied_with_hardlink": {"ok": False, "code": "unsafe_tree"},
+            "native_hardlink": {"opened": True, "matched": False},
+        }
+        checks = {c["id"]: c["status"] for c in P.classify(baseline, hardlink, "x")}
+        self.assertEqual(checks["native_hardlink_result_consistent"], "FAIL")
+
     def test_fake_srt_without_isolation_must_fail(self):
         # Fake valida JSON mas executa o processo diretamente. NUNCA PASS.
         result = P.run_synthetic(deps=self.fake("validate"), timeout=20)
