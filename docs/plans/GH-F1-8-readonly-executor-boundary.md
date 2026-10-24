@@ -53,7 +53,11 @@ escrever arquivos, iniciar agente, abrir rede ou instalar componentes.
 - `read` usa `pathguard.read_bytes` e aceita somente texto UTF-8 ate
   64 KiB. `list` usa `pathguard.list_dir` e limita resposta a 1024 entradas.
   Erros reportam codigos estaveis, sem nomes dos arquivos nem conteudo.
-- A cada solicitacao chama `pathguard.scan_tree` (ate 20000 entradas).
+- A cada solicitacao chama `pathguard.scan_tree` (ate 20000 entradas e
+  64 niveis). O scanner e incremental (`os.scandir(fd)`), sem listas completas
+  de nomes e sem manter FD para cada diretorio irmao; arvore muito larga,
+  profunda ou com entradas demais e recusada. O `pathguard.list_dir` tambem
+  limita nomes *durante* a leitura, antes de ordenar/materializar resposta.
   Achados de symlink, hardlink, arquivo especial ou outro dispositivo
   recusam a operacao integralmente; excesso de entradas/erros tambem recusa.
   Isso e **higiene adicional**, e nao uma prova sem corrida.
