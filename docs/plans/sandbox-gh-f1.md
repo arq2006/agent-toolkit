@@ -1,9 +1,9 @@
 # Sandbox descartável das etapas GH-F1.5 e GH-F1.6
 
-Status: **condições aprovadas por Arthur em 22/10/2026; o sandbox NÃO foi criado.** Este documento registra as condições; ele não executa nada. Plano geral: [GH-F1-arquitetura-inicial-agentes.md](GH-F1-arquitetura-inicial-agentes.md). Políticas: [matriz](../../policies/matriz-riscos-permissoes-aprovacoes.md).
+Status: **condições aprovadas por Arthur em 22/10/2026; a criação e o piloto parcial foram feitos por Arthur no notebook (relato dele; esta sessão não os verificou). Aceite integral pendente.** Este documento registra as condições; ele não executa nada. Plano geral: [GH-F1-arquitetura-inicial-agentes.md](GH-F1-arquitetura-inicial-agentes.md). Políticas: [matriz](../../policies/matriz-riscos-permissoes-aprovacoes.md).
 
 ## Autorização (limitada)
-Criação de um repositório Git **local e descartável** em `~/Projetos/agent-toolkit-sandbox`, **exclusivamente** para a GH-F1.5 e a GH-F1.6. Não vale para nenhuma outra etapa, caminho ou finalidade.
+Criação de um repositório Git **local e descartável** em `/home/agent-pilot/agent-toolkit-sandbox` (conta Linux dedicada `agent-pilot`; caminho atualizado por decisão de Arthur em 22/10/2026, substitui `~/Projetos/agent-toolkit-sandbox` na home pessoal; ver [guia Arch](../setup/arch-linux.md)), **exclusivamente** para a GH-F1.5 e a GH-F1.6. Não vale para nenhuma outra etapa, caminho ou finalidade.
 
 ## Condições obrigatórias
 1. **Antes de criar**, verificar que o caminho não existe ou está completamente vazio. Se contiver qualquer arquivo, interromper e relatar.

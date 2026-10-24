@@ -9,6 +9,8 @@ Este arquivo orienta qualquer sessão de trabalho. Não tente implementar o ecos
 - **GH-F1.1 concluída:** contratos de agente, skill e tarefa em [contratos/](contratos/README.md) (PR #5).
 - **GH-F1.2 concluída:** definições documentais de `planner`, `implementer` e `auditor` em [../agents/](../agents/README.md) (PR #6).
 - **GH-F1.3 (concluída, PR #7):** [pesquisa](pesquisas/claude-code-materializacao-2026-10-22.md), [ADR-010](adr/ADR-010-materializacao-em-claude-code.md) (proposta), correções de contrato e estudo da futura [GH-F1.7](plans/GH-F1-7-orquestracao-hierarquica.md); GH-F1.4 em diante só com autorização por etapa.
+- **GH-F1.4 (concluída, PR #8):** [materialização](materializacao-claude-code.md) de `planner` e `auditor` em `.claude/agents/`; `implementer` não materializado.
+- **GH-F1.5 (piloto executado parcialmente; aceite integral pendente):** [protocolo do piloto](pilotos/GH-F1-5-piloto-somente-leitura.md); achados do Codex endereçados documentalmente no PR #9 (reteste local pendente); repetir os passos corrigidos e preencher o manifesto de evidências.
 - **Próximo:** GH-F1 (agentes Claude Code), **somente após autorização humana específica**; proposta em [plans/GH-F1-arquitetura-inicial-agentes.md](plans/GH-F1-arquitetura-inicial-agentes.md).
 - Auditoria independente do Codex: **não realizada** na F0.1 nem na F0.2 (indisponível no ambiente de nuvem); só houve revisão própria e leitura humana; a auditoria continua **pendente**. Registrar o mesmo em fases futuras se continuar assim.
 

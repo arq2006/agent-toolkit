@@ -83,5 +83,5 @@ RK-02, RK-04, RK-06, RK-07, RK-08, RK-10 e RK-15 da matriz. Dependência crític
 2. Nomes mantidos: `planner`, `implementer`, `auditor`.
 3. Modelo: Sonnet com esforço médio, subindo o esforço em tarefas complexas; Codex como auditor independente quando disponível.
 4. Codex não é exigido antes da GH-F1.1; auditoria local planejada após a GH-F1.4 e antes da primeira implementação com escrita do piloto.
-5. Sandbox local aprovado condicionalmente para GH-F1.5 e GH-F1.6 ([sandbox-gh-f1.md](sandbox-gh-f1.md)); **não foi criado**.
+5. Sandbox local aprovado condicionalmente para GH-F1.5 e GH-F1.6 ([sandbox-gh-f1.md](sandbox-gh-f1.md)); criado e usado parcialmente por Arthur no notebook (aceite integral pendente; esta sessão não verificou).
 6. Matriz de permissões distingue autorização humana de execução delegada, e separa proteção de branch das operações de PR.
