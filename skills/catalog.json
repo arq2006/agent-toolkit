@@ -20,9 +20,9 @@
       "id": "replica-design",
       "kind": "skill",
       "source": "https://github.com/Jakeschincariol/replica-skill",
-      "license_reported": "MIT declarado no repositório",
+      "license_reported": "MIT confirmado no repositório",
       "state": "candidate",
-      "risk": "low",
+      "risk": "medium",
       "roles": [
         "ui-ux",
         "frontend"
@@ -39,9 +39,9 @@
       "id": "impeccable",
       "kind": "skill",
       "source": "https://github.com/pbakaus/impeccable",
-      "license_reported": "a verificar na adoção",
+      "license_reported": "Apache-2.0 confirmado no repositório; instalação local não verificada",
       "state": "reported-global",
-      "risk": "low",
+      "risk": "high",
       "roles": [
         "ui-ux",
         "frontend"
@@ -58,7 +58,7 @@
       "id": "frontend-design",
       "kind": "skill",
       "source": "https://github.com/anthropics/skills",
-      "license_reported": "a verificar",
+      "license_reported": "Apache-2.0 confirmado em LICENSE.txt da skill",
       "state": "candidate",
       "risk": "low",
       "roles": [
@@ -77,9 +77,9 @@
       "id": "web-design-guidelines",
       "kind": "skill",
       "source": "https://github.com/vercel-labs/agent-skills",
-      "license_reported": "a verificar",
+      "license_reported": "Licença não verificada; proibir redistribuição até confirmação",
       "state": "candidate",
-      "risk": "low",
+      "risk": "medium",
       "roles": [
         "ui-ux",
         "qa",
@@ -134,7 +134,7 @@
       "id": "vercel-react-best-practices",
       "kind": "skill",
       "source": "https://github.com/vercel-labs/agent-skills",
-      "license_reported": "a verificar",
+      "license_reported": "MIT declarado no SKILL.md; sem LICENSE independente localizado",
       "state": "candidate",
       "risk": "low",
       "roles": [
@@ -245,9 +245,9 @@
       "id": "webapp-testing",
       "kind": "skill",
       "source": "https://github.com/anthropics/skills",
-      "license_reported": "a verificar",
+      "license_reported": "Apache-2.0 confirmado em LICENSE.txt da skill",
       "state": "candidate",
-      "risk": "low",
+      "risk": "high",
       "roles": [
         "qa"
       ],
