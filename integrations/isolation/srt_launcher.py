@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 
 import pathguard
@@ -428,13 +429,17 @@ def child(kind, path):
         return json.loads(r.stdout.decode().strip().splitlines()[-1])
     except Exception as e:
         return {"ok": False, "err": "child:" + type(e).__name__}
-def tcp(host, port):
+def tcp(host, port, hello):
     try:
         s = socket.create_connection((host, port), timeout=3)
-        s.close()
-        return {"ok": True}
     except Exception as e:
-        return {"ok": False, "err": type(e).__name__}
+        return {"ok": False, "attempted": True, "err": type(e).__name__}
+    try:
+        s.sendall(hello.encode())
+    except Exception:
+        pass
+    s.close()
+    return {"ok": True, "attempted": True}
 def proc(pid):
     r = {}
     for n in ("environ", "cmdline"):
@@ -449,7 +454,7 @@ for name, kind, arg in P["ops"]:
     elif kind == "write": res[name] = wr(arg)
     elif kind == "child_read": res[name] = child("r", arg)
     elif kind == "child_write": res[name] = child("w", arg)
-    elif kind == "tcp": res[name] = tcp(arg[0], arg[1])
+    elif kind == "tcp": res[name] = tcp(arg[0], arg[1], arg[2])
     elif kind == "proc": res[name] = proc(arg)
     elif kind == "env": res[name] = envinfo(arg)
 print(json.dumps({"nonce": P["nonce"], "results": res}))
@@ -594,14 +599,31 @@ def run_fail_closed_probe(deps, fx, kind, timeout=DEFAULT_TIMEOUT):
 
 
 class TcpListeners:
-    """Ouvintes TCP no host (loopback e, se houver, interface não loopback) para provar que o
-    sandbox não os alcança. Um accept() significa vazamento de rede."""
+    """Ouvintes TCP no host (loopback e, se houver, interface não loopback) para provar que o sandbox
+    não os alcança. Cada conexão aceita é registrada com o que o cliente anunciou:
+      - "control": enviou CONTROL-<token> (controle positivo do próprio host);
+      - "sandbox": enviou SANDBOX-<token> (canário dentro do sandbox chegou ao host = vazamento);
+      - "unattributed": nada/lixo (tratada como possível vazamento, nunca como controle).
+    O controle só retorna depois de o accept() correspondente ter sido registrado (sem corrida)."""
 
     def __init__(self):
         self.socks = {}
-        self.hits = {}
         self.threads = []
         self.control_ok = {}
+        self.token = secrets.token_hex(8)
+        self._lock = threading.Lock()
+        self._events = []
+        self._control_seen = {}
+        self._last_empty_poll = {}
+        self._accept_delay = 0.0  # só para testes: atrasa o registro do accept
+
+    @property
+    def control_hello(self):
+        return "CONTROL-" + self.token
+
+    @property
+    def sandbox_hello(self):
+        return "SANDBOX-" + self.token
 
     @staticmethod
     def _external_ip():
@@ -615,21 +637,27 @@ class TcpListeners:
             s.close()
         return None if ip.startswith("127.") or ip == "0.0.0.0" else ip
 
+    @property
+    def hits(self):
+        """Compatibilidade: conexões NÃO atribuídas ao controle, por rótulo."""
+        return {k: sum(1 for e in self._events if e["label"] == k and e["kind"] != "control") for k in self.socks}
+
     def start(self):
+        self._stop = threading.Event()
         for label, ip in (("loopback", "127.0.0.1"), ("external", self._external_ip())):
             if not ip:
                 continue
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 s.bind((ip, 0))
-                s.listen(4)
+                s.listen(8)
             except OSError:
                 s.close()
                 continue
             s.settimeout(0.2)
             self.socks[label] = (s, ip, s.getsockname()[1])
-            self.hits[label] = 0
-        self._stop = threading.Event()
+            self._control_seen[label] = threading.Event()
+            self._last_empty_poll[label] = 0.0
         for label in self.socks:
             t = threading.Thread(target=self._loop, args=(label,), daemon=True)
             t.start()
@@ -640,31 +668,69 @@ class TcpListeners:
         s = self.socks[label][0]
         while not self._stop.is_set():
             try:
-                c, _ = s.accept()
-                self.hits[label] += 1
-                c.close()
-            except (socket.timeout, OSError):
+                c, peer = s.accept()
+            except socket.timeout:
+                self._last_empty_poll[label] = time.monotonic()
                 continue
+            except OSError:
+                return
+            try:
+                c.settimeout(1.0)
+                try:
+                    data = c.recv(64)
+                except OSError:
+                    data = b""
+            finally:
+                c.close()
+            if self._accept_delay:
+                time.sleep(self._accept_delay)
+            text = data.decode("utf-8", "replace")
+            kind = ("control" if text == self.control_hello else "sandbox" if text == self.sandbox_hello
+                    else "unattributed")
+            with self._lock:
+                self._events.append({"label": label, "kind": kind, "peer_port": peer[1]})
+            if kind == "control":
+                self._control_seen[label].set()
 
     def target(self, label):
         e = self.socks.get(label)
-        return (e[1], e[2]) if e else None
+        return (e[1], e[2], self.sandbox_hello) if e else None
 
-    def host_control(self, label):
-        """Controle: o próprio host consegue conectar (prova que o ouvinte funciona)."""
-        t = self.target(label)
-        if not t:
+    def host_control(self, label, wait=5.0):
+        """Controle positivo: o host conecta e anuncia CONTROL-<token>. Só devolve True depois que o
+        ouvinte registrou essa conexão (sincronizado), provando que o ouvinte funciona."""
+        e = self.socks.get(label)
+        if not e:
             return False
+        self._control_seen[label].clear()
         try:
-            socket.create_connection(t, timeout=2).close()
-            return True
+            with socket.create_connection((e[1], e[2]), timeout=2) as c:
+                c.sendall(self.control_hello.encode())
         except OSError:
             return False
+        return self._control_seen[label].wait(wait)
+
+    def settle(self, timeout=3.0):
+        """Aguarda cada ouvinte esvaziar o backlog (um poll sem conexão pendente após esta chamada),
+        para que accept() atrasados já estejam registrados antes de ler as evidências."""
+        t0 = time.monotonic()
+        deadline = t0 + timeout
+        while time.monotonic() < deadline:
+            if all(self._last_empty_poll[k] > t0 for k in self.socks):
+                break
+            time.sleep(0.05)
+        if self._accept_delay:
+            time.sleep(self._accept_delay + 0.1)
+
+    def summary(self, label):
+        with self._lock:
+            ev = [e for e in self._events if e["label"] == label]
+        return {k: sum(1 for e in ev if e["kind"] == k) for k in ("control", "sandbox", "unattributed")}
 
     def stop(self):
         self._stop.set()
         for t in self.threads:
-            t.join(timeout=2)
+            t.join(timeout=3)
         for s, _, _ in self.socks.values():
             s.close()
 

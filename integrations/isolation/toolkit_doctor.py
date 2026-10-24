@@ -43,9 +43,11 @@ class Report:
     def __init__(self):
         self.checks = []
 
-    def add(self, cid, title, status, reason="", mandatory=True):
-        self.checks.append({"id": cid, "title": title, "status": status, "reason": reason,
-                            "mandatory": mandatory})
+    def add(self, cid, title, status, reason="", mandatory=True, evidence=None):
+        c = {"id": cid, "title": title, "status": status, "reason": reason, "mandatory": mandatory}
+        if evidence is not None:
+            c["evidence"] = evidence
+        self.checks.append(c)
 
     def not_tested(self, ids_titles, reason):
         for cid, title in ids_titles:
@@ -137,8 +139,23 @@ def _check_canaries(rep, fx, res, listeners, sentinel_env_ok):
         elif not listeners.control_ok.get(label):
             rep.add(cid, t[cid], NOT_TESTED, "controle falhou: o próprio host não alcançou o ouvinte")
         else:
-            bad = r[op].get("ok") or listeners.hits.get(label, 0) > 0
-            rep.add(cid, t[cid], FAIL if bad else PASS, "conexão chegou ao host" if bad else "")
+            cnt = listeners.summary(label)
+            rep_ok = bool(r[op].get("ok"))
+            ev = {"control_connections": cnt["control"],               # controle positivo do host
+                  "sandbox_attempted": bool(r[op].get("attempted")),   # tentativa originada pelo canário
+                  "received_from_sandbox": cnt["sandbox"],             # recebida de fato pelo ouvinte
+                  "unattributed_connections": cnt["unattributed"],     # nem controle nem canário
+                  "probe_reported_connected": rep_ok,                  # relato do processo do canário
+                  "probe_error": r[op].get("err", "")}
+            if cnt["sandbox"] or cnt["unattributed"] or rep_ok:
+                why = ("conexão do sandbox RECEBIDA pelo host" if cnt["sandbox"] else
+                       "conexão não atribuída ao controle (possível vazamento)" if cnt["unattributed"] else
+                       "o canário relatou conexão estabelecida, sem registro no ouvinte")
+                rep.add(cid, t[cid], FAIL, why, evidence=ev)
+            elif not ev["sandbox_attempted"]:
+                rep.add(cid, t[cid], NOT_TESTED, "o canário não relatou tentativa de conexão", evidence=ev)
+            else:
+                rep.add(cid, t[cid], PASS, "", evidence=ev)
     e = g("env")
     if not e.get("ok"):
         rep.add("env_not_inherited", t["env_not_inherited"], NOT_TESTED, "sem relatório de ambiente")
@@ -303,8 +320,6 @@ def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
         try:
             with L.create_fixture() as fx, L.TcpListeners() as lst:
                 lst.control_ok = {k: lst.host_control(k) for k in lst.socks}
-                for k in lst.hits:
-                    lst.hits[k] = 0
                 _check_pathguard(rep, fx)
                 synth = dataclasses.replace(config, authorized_dir=fx.authorized, auth_mode="none")
                 try:
@@ -312,6 +327,7 @@ def run_doctor(config_path, timeout=L.DEFAULT_TIMEOUT, deps=None):
                                       os.getpid(), sentinel, timeout)
                 except L.LauncherError as e:
                     res = L.SuiteResult(False, str(e))
+                lst.settle()  # accept() atrasados registrados antes de ler as evidências
                 if not res.ran:
                     rep.add("canary_run", dict(CANARY_CHECKS)["canary_run"], FAIL,
                             f"{res.reason} (código={res.returncode}, timeout={res.timed_out}); "

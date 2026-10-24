@@ -168,6 +168,12 @@ class FakeNoopSandbox(Base):
         for cid in ("outside_read_blocked", "outside_write_blocked", "home_decoy_blocked", "policy_file_hidden",
                     "subprocess_restricted", "dotdot_blocked", "proc_blocked"):
             self.assertEqual(self.status(rep, cid), D.FAIL, cid)
+        for cid in ("tcp_loopback_blocked", "tcp_external_blocked"):
+            c = next(c for c in rep["checks"] if c["id"] == cid)
+            if c["status"] != D.NOT_TESTED:  # NOT_TESTED só se o host não tiver a interface
+                self.assertEqual(c["status"], D.FAIL, cid)
+                self.assertGreaterEqual(c["evidence"]["received_from_sandbox"], 1)
+                self.assertEqual(c["evidence"]["control_connections"], 1)
         self.assertEqual(self.status(rep, "env_not_inherited"), D.PASS)  # ambiente é do launcher, não do srt
         self.assertEqual(rep["summary"]["sandbox_canaries"], "FAILED")
         self.assertEqual(rep["exit_code"], 2)
@@ -202,6 +208,7 @@ class Classification(Base):
             f.write(b"probe-write")
         fx = self.fx
         blocked = {"ok": False, "err": "PermissionError"}
+        netblocked = {"ok": False, "attempted": True, "err": "OSError"}
         self.good = {
             "auth_read": {"ok": True, "data": fx.auth_marker}, "auth_write": {"ok": True},
             "auth_child_read": {"ok": True, "data": fx.auth_marker},
@@ -209,10 +216,11 @@ class Classification(Base):
             "settings_read": blocked, "child_ext_read": blocked, "child_ext_write": blocked, "dotdot_read": blocked,
             "symlink_read": blocked, "hardlink_read": blocked, "proc_host": blocked,
             "env": {"ok": True, "keys": ["PATH", "HOME"], "sentinel_visible": False},
-            "tcp_loopback": blocked, "tcp_external": blocked,
+            "tcp_loopback": netblocked, "tcp_external": netblocked,
         }
-        self.lst = mock.Mock(socks={"loopback": 1, "external": 1}, hits={"loopback": 0, "external": 0},
-                             control_ok={"loopback": True, "external": True})
+        self.counts = {k: {"control": 1, "sandbox": 0, "unattributed": 0} for k in ("loopback", "external")}
+        self.lst = mock.Mock(socks={"loopback": 1, "external": 1}, control_ok={"loopback": True, "external": True},
+                             summary=lambda label: dict(self.counts[label]))
 
     def run_checks(self, results):
         rep = D.Report()
@@ -234,8 +242,8 @@ class Classification(Base):
             ("ext_create", "outside_write_blocked", {"ok": True}),
             ("child_ext_read", "subprocess_restricted", {"ok": True, "data": fx.secret_marker}),
             ("proc_host", "proc_blocked", {"ok": True}),
-            ("tcp_loopback", "tcp_loopback_blocked", {"ok": True}),
-            ("tcp_external", "tcp_external_blocked", {"ok": True}),
+            ("tcp_loopback", "tcp_loopback_blocked", {"ok": True, "attempted": True}),
+            ("tcp_external", "tcp_external_blocked", {"ok": True, "attempted": True}),
             ("settings_read", "policy_file_hidden", {"ok": True, "data": "{}"}),
             ("env", "env_not_inherited", {"ok": True, "keys": [], "sentinel_visible": True}),
         ):
@@ -243,9 +251,35 @@ class Classification(Base):
             r[op] = val
             self.assertEqual(self.run_checks(r)[cid]["status"], D.FAIL, cid)
 
-    def test_listener_hit_fails(self):
-        self.lst.hits["loopback"] = 1
-        self.assertEqual(self.run_checks(self.good)["tcp_loopback_blocked"]["status"], D.FAIL)
+    def test_sandbox_connection_received_fails_and_is_reported(self):
+        self.counts["loopback"]["sandbox"] = 1
+        c = self.run_checks(self.good)["tcp_loopback_blocked"]
+        self.assertEqual(c["status"], D.FAIL)
+        self.assertEqual(c["evidence"]["received_from_sandbox"], 1)
+        self.assertEqual(c["evidence"]["control_connections"], 1)
+
+    def test_unattributed_connection_fails(self):
+        self.counts["external"]["unattributed"] = 1
+        self.assertEqual(self.run_checks(self.good)["tcp_external_blocked"]["status"], D.FAIL)
+
+    def test_control_connections_alone_never_fail(self):
+        self.counts["external"]["control"] = 3  # controle positivo (inclusive repetido/atrasado)
+        c = self.run_checks(self.good)["tcp_external_blocked"]
+        self.assertEqual(c["status"], D.PASS)
+        self.assertEqual(c["evidence"]["probe_reported_connected"], False)
+        self.assertTrue(c["evidence"]["sandbox_attempted"])
+
+    def test_probe_reported_connection_without_listener_record_fails(self):
+        r = dict(self.good)
+        r["tcp_external"] = {"ok": True, "attempted": True}
+        c = self.run_checks(r)["tcp_external_blocked"]
+        self.assertEqual(c["status"], D.FAIL)
+        self.assertEqual(c["evidence"]["received_from_sandbox"], 0)
+
+    def test_no_attempt_reported_is_not_tested(self):
+        r = dict(self.good)
+        r["tcp_external"] = {"ok": False, "err": "x"}
+        self.assertEqual(self.run_checks(r)["tcp_external_blocked"]["status"], D.NOT_TESTED)
 
     def test_missing_network_control_is_not_tested(self):
         self.lst.control_ok["external"] = False

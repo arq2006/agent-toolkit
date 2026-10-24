@@ -8,6 +8,7 @@ import dataclasses
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import tempfile
@@ -262,6 +263,87 @@ class Deps(unittest.TestCase):
         d = self.detect()
         self.assertFalse(d.get("node").ok)
         self.assertFalse(d.get("srt").ok)
+
+
+class Listeners(unittest.TestCase):
+    """Separação controle positivo x conexões do sandbox; accept() atrasado não vira falso positivo."""
+
+    def connect(self, lst, label, hello):
+        ip, port = lst.socks[label][1], lst.socks[label][2]
+        with socket.create_connection((ip, port), timeout=2) as c:
+            if hello is not None:
+                c.sendall(hello.encode())
+
+    def test_control_waits_for_registration_and_is_not_sandbox(self):
+        with L.TcpListeners() as lst:
+            lst._accept_delay = 0.6  # accept() registrado bem depois de o controle conectar
+            t0 = time.time()
+            self.assertTrue(lst.host_control("loopback"))
+            self.assertGreaterEqual(time.time() - t0, 0.5)  # esperou o registro: sem corrida
+            lst.settle()
+            self.assertEqual(lst.summary("loopback"), {"control": 1, "sandbox": 0, "unattributed": 0})
+            self.assertEqual(lst.hits["loopback"], 0)
+
+    def test_late_control_accept_after_control_returned_is_still_control(self):
+        # reproduz a corrida original: o controle é contabilizado depois de qualquer "reset"; por
+        # identidade explícita ele continua sendo controle, nunca sandbox
+        with L.TcpListeners() as lst:
+            lst._accept_delay = 0.4
+            ip, port = lst.socks["loopback"][1], lst.socks["loopback"][2]
+            with socket.create_connection((ip, port), timeout=2) as c:  # sem esperar o registro
+                c.sendall(lst.control_hello.encode())
+            time.sleep(0.05)
+            self.assertEqual(lst.summary("loopback")["sandbox"], 0)
+            lst.settle()
+            self.assertEqual(lst.summary("loopback"), {"control": 1, "sandbox": 0, "unattributed": 0})
+
+    def test_real_sandbox_connection_is_counted_as_sandbox(self):
+        with L.TcpListeners() as lst:
+            self.assertTrue(lst.host_control("loopback"))
+            self.connect(lst, "loopback", lst.sandbox_hello)
+            lst.settle()
+            self.assertEqual(lst.summary("loopback"), {"control": 1, "sandbox": 1, "unattributed": 0})
+
+    def test_delayed_sandbox_accept_is_collected_by_settle(self):
+        with L.TcpListeners() as lst:
+            lst._accept_delay = 0.4
+            self.connect(lst, "loopback", lst.sandbox_hello)
+            lst.settle()
+            self.assertEqual(lst.summary("loopback")["sandbox"], 1)
+
+    def test_anonymous_or_forged_connection_is_unattributed(self):
+        with L.TcpListeners() as lst:
+            self.connect(lst, "loopback", None)
+            self.connect(lst, "loopback", "CONTROL-wrongtoken")
+            lst.settle()
+            self.assertEqual(lst.summary("loopback"), {"control": 0, "sandbox": 0, "unattributed": 2})
+
+    def test_target_carries_sandbox_hello_not_control(self):
+        with L.TcpListeners() as lst:
+            ip, port, hello = lst.target("loopback")
+            self.assertEqual(hello, lst.sandbox_hello)
+            self.assertNotEqual(lst.sandbox_hello, lst.control_hello)
+
+    def test_probe_sends_sandbox_hello_when_it_connects(self):
+        # executa o PROBE_SRC (sem sandbox, só lógica) contra um ouvinte real
+        with L.TcpListeners() as lst:
+            ip, port, hello = lst.target("loopback")
+            payload = json.dumps({"nonce": "n", "ops": [["t", "tcp", [ip, port, hello]]]})
+            r = subprocess.run(["/usr/bin/python3", "-I", "-c", L.PROBE_SRC, payload], capture_output=True, timeout=30)
+            res = json.loads(r.stdout.decode().strip().splitlines()[-1])["results"]["t"]
+            lst.settle()
+            self.assertEqual((res["ok"], res["attempted"]), (True, True))
+            self.assertEqual(lst.summary("loopback")["sandbox"], 1)
+
+    def test_probe_reports_attempt_when_connection_fails(self):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()  # porta fechada: conexão recusada
+        payload = json.dumps({"nonce": "n", "ops": [["t", "tcp", ["127.0.0.1", port, "SANDBOX-x"]]]})
+        r = subprocess.run(["/usr/bin/python3", "-I", "-c", L.PROBE_SRC, payload], capture_output=True, timeout=30)
+        res = json.loads(r.stdout.decode().strip().splitlines()[-1])["results"]["t"]
+        self.assertEqual((res["ok"], res["attempted"]), (False, True))
 
 
 class Execution(unittest.TestCase):
