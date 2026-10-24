@@ -224,51 +224,85 @@ def write_bytes(root_fd, rel, data, overwrite=False, max_bytes=DEFAULT_MAX_READ)
         os.close(dfd)
 
 
-def list_dir(root_fd, rel=None):
-    """Lista nomes de um diretório dentro da pasta (None = a própria pasta)."""
+
+class ListLimitExceeded(PathGuardError):
+    """Listagem negada quando excede o limite de nomes autorizado."""
+
+
+def list_dir(root_fd, rel=None, max_entries=100_000):
+    """Lista nomes com limite ANTES de materializar uma pasta muito larga.
+
+    scandir(fd) percorre em streaming; sorted() acontece só após cumprir o limite.
+    O descritor entregue pelo chamador não é fechado aqui.
+    """
+    if type(max_entries) is not int or not 1 <= max_entries <= 100_000:
+        raise PathGuardError("limite de listagem inválido")
     parts = split_relpath(rel) if rel is not None else ()
     dfd = _walk_dirs(root_fd, parts)
     try:
-        return sorted(os.listdir(dfd))
+        names = []
+        with os.scandir(dfd) as entries:
+            for entry in entries:
+                if len(names) >= max_entries:
+                    raise ListLimitExceeded("limite de listagem excedido")
+                names.append(entry.name)
+        return sorted(names)
     finally:
         os.close(dfd)
 
 
-def scan_tree(root_fd, max_entries=100_000):
-    """Varre a árvore sem seguir symlinks e devolve achados que tornam a árvore suspeita:
-    symlinks, hardlinks (nlink>1), tipos especiais e outros dispositivos. Lista vazia
-    significa apenas 'nada visto agora', não prova de segurança."""
-    findings, count = [], 0
+def scan_tree(root_fd, max_entries=100_000, max_depth=64):
+    """Inspeciona em streaming, sem seguir symlinks e com descritores limitados.
+
+    No máximo max_entries objetos visitados e max_depth descritores de
+    subdiretório abertos por caminho; sem listas completas de irmãos na memória.
+    Retorna achados de symlinks, hardlinks, objetos especiais e outro device.
+    Uma árvore limpa no instante do scan NÃO elimina TOCTOU ou bind mounts.
+    """
+    if type(max_entries) is not int or not 1 <= max_entries <= 100_000:
+        raise PathGuardError("limite de varredura inválido")
+    if type(max_depth) is not int or not 1 <= max_depth <= 64:
+        raise PathGuardError("profundidade de varredura inválida")
+
+    findings = []
+    count = 0
     root_dev = os.fstat(root_fd).st_dev
-    stack = [(os.dup(root_fd), "")]
-    try:
-        while stack:
-            dfd, prefix = stack.pop()
-            try:
-                for name in sorted(os.listdir(dfd)):
-                    count += 1
-                    if count > max_entries:
-                        raise PathGuardError("árvore grande demais para varredura")
-                    rel = prefix + name
-                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
-                    if stat.S_ISLNK(st.st_mode):
-                        findings.append((rel, "symlink"))
-                    elif st.st_dev != root_dev:
-                        findings.append((rel, "outro dispositivo"))
-                    elif stat.S_ISDIR(st.st_mode):
-                        try:
-                            sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                                          dir_fd=dfd)
-                        except OSError as e:
-                            raise PathGuardError(f"varredura recusada ({e.strerror})") from None
-                        stack.append((sub, rel + "/"))
-                    elif not stat.S_ISREG(st.st_mode):
-                        findings.append((rel, "tipo especial"))
-                    elif st.st_nlink != 1:
-                        findings.append((rel, "hardlink"))
-            finally:
-                os.close(dfd)
-    finally:
-        for dfd, _ in stack:
-            os.close(dfd)
-    return findings
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def visit(dfd, prefix, depth):
+        nonlocal count
+        # scandir(fd) não materializa todos os nomes, ao contrário de os.listdir.
+        with os.scandir(dfd) as entries:
+            for entry in entries:
+                count += 1
+                if count > max_entries:
+                    raise PathGuardError("árvore grande demais para varredura")
+                rel = prefix + entry.name
+                if len(rel) > MAX_PATH:
+                    raise PathGuardError("caminho profundo demais para varredura")
+                st = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(st.st_mode):
+                    findings.append((rel, "symlink"))
+                elif st.st_dev != root_dev:
+                    findings.append((rel, "outro dispositivo"))
+                elif stat.S_ISDIR(st.st_mode):
+                    if depth >= max_depth:
+                        raise PathGuardError("profundidade de varredura excedida")
+                    try:
+                        sub = os.open(entry.name, flags, dir_fd=dfd)
+                    except OSError as e:
+                        raise PathGuardError(f"varredura recusada ({e.strerror})") from None
+                    try:
+                        if os.fstat(sub).st_dev != root_dev:
+                            findings.append((rel, "outro dispositivo"))
+                        else:
+                            visit(sub, rel + "/", depth + 1)
+                    finally:
+                        os.close(sub)
+                elif not stat.S_ISREG(st.st_mode):
+                    findings.append((rel, "tipo especial"))
+                elif st.st_nlink != 1:
+                    findings.append((rel, "hardlink"))
+
+    visit(root_fd, "", 0)
+    return sorted(findings)

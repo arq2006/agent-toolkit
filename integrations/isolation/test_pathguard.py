@@ -227,5 +227,61 @@ class Scan(Base):
             P.scan_tree(self.fd, max_entries=1)
 
 
+    def test_scan_streaming_many_sibling_directories_uses_bounded_fds(self):
+        for i in range(110):
+            os.mkdir(os.path.join(self.root, f"sib-{i:03d}"))
+        original_open, original_close = os.open, os.close
+        opened = set()
+        peak = 0
+
+        def counting_open(*args, **kwargs):
+            nonlocal peak
+            fd = original_open(*args, **kwargs)
+            opened.add(fd)
+            peak = max(peak, len(opened))
+            return fd
+
+        def counting_close(fd):
+            opened.discard(fd)
+            return original_close(fd)
+
+        # O scanner não pode manter um FD para cada irmão da árvore.
+        with mock.patch.object(P.os, "open", side_effect=counting_open):
+            with mock.patch.object(P.os, "close", side_effect=counting_close):
+                self.assertEqual(P.scan_tree(self.fd), [])
+        self.assertEqual(opened, set())
+        self.assertLessEqual(peak, 5)
+
+    def test_scan_and_list_stream_without_os_listdir(self):
+        for i in range(12):
+            with open(os.path.join(self.root, f"file-{i:02d}"), "w") as out:
+                out.write("x")
+        with mock.patch.object(P.os, "listdir",
+                               side_effect=AssertionError("os.listdir materializou a pasta")):
+            self.assertEqual(P.scan_tree(self.fd), [])
+            self.assertEqual(len(P.list_dir(self.fd)), 14)
+            with self.assertRaises(P.ListLimitExceeded):
+                P.list_dir(self.fd, max_entries=3)
+            with self.assertRaises(P.PathGuardError):
+                P.scan_tree(self.fd, max_entries=3)
+
+    def test_scan_depth_and_invalid_resource_limits(self):
+        parent = self.root
+        for _ in range(65):
+            parent = os.path.join(parent, "d")
+            os.mkdir(parent)
+        with self.assertRaises(P.PathGuardError):
+            P.scan_tree(self.fd, max_depth=64)
+        for invalid in (0, -1, True, 100_001, "10"):
+            with self.assertRaises(P.PathGuardError):
+                P.scan_tree(self.fd, max_entries=invalid)
+            with self.assertRaises(P.PathGuardError):
+                P.list_dir(self.fd, max_entries=invalid)
+        for invalid_depth in (0, True, 65):
+            with self.assertRaises(P.PathGuardError):
+                P.scan_tree(self.fd, max_depth=invalid_depth)
+
+
+
 if __name__ == "__main__":
     unittest.main()

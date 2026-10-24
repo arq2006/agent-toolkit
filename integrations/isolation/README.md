@@ -19,6 +19,21 @@ de diretórios ancestrais por quem tenha escrita neles.
 
 Testes (diretórios temporários fictícios): `python3 -I -m unittest discover -s integrations/isolation -p 'test_*.py'`
 
+## PR4: interface read-only restrita (fundacao; nao ativa)
+
+- `readonly_executor.py`: **somente biblioteca**, sem CLI ou integracao com agentes.
+  Recebe JSON estrito de `read` ou `list`, limita tamanho, rejeita campos e
+  operacoes inesperados e usa exclusivamente `pathguard` para ler/listar.
+  Antes de cada solicitacao, `scan_tree` recusa a arvore se detectar symlinks,
+  hardlinks ou objetos especiais. Listagem e varredura sao incrementais, com
+  limites de entradas/profundidade e rejeicao antecipada de surrogates Unicode.
+  Os testes usam fixtures ficticias e cobrem
+  negacoes. **Nao e mitigacao para Read/Edit nativos**, nem elimina bind mounts
+  do mesmo dispositivo ou TOCTOU. Sem SRT e sem coordenador/controle de permissoes
+  integrado, **nada e autorizado**. Detalhes e gates em
+  [GH-F1.8 — read-only executor](../../docs/plans/GH-F1-8-readonly-executor-boundary.md).
+- Testes propostos: `python3 -I -m unittest discover -s integrations/isolation -p 'test_readonly_executor.py' -v`.
+
 ## PR3: launcher SRT e doctor (diagnóstico; não libera agentes)
 
 - `srt_launcher.py`: detecta (nunca instala) `srt` **exatamente 0.0.81**, `node`, `bwrap` (>= 0.8.0; só 0.12.0 foi
