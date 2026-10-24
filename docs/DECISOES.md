@@ -48,6 +48,8 @@ Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonn
 ## ADR-011 — Isolamento portátil do processo
 **Status:** proposta (GH-F1.8, identificador provisório; 24/10/2026). Ver [adr/ADR-011-isolamento-do-processo.md](adr/ADR-011-isolamento-do-processo.md). Direção aprovada por Arthur: Python 3.11+ (biblioteca padrão) e TOML em `integrations/isolation/`; STRONG só com validação efetiva do `doctor` (leitura/escrita, subprocessos, caminhos indiretos, hardlinks, fail-closed); coordenador autenticado fora do sandbox não é isolamento integral. Spike manual (Arch, 24/10) comprovou bubblewrap e srt sem sudo; hardlinks preexistentes são limitação confirmada. **Nada implementado e nenhum ambiente é STRONG.** GH-F1.5 preservada; GH-F1.6 bloqueada.
 
+**PR3 (GH-F1.8, 24/10/2026):** launcher SRT e `toolkit_doctor` em `integrations/isolation/`, com srt fixado em 0.0.81, rede só em deny e canários apenas em fixture sintético. STRONG permanece indisponível e operações com arquivos, BLOCKED; o resultado do doctor não autoriza execução de agentes. Detalhes e limites em `integrations/isolation/README.md`.
+
 ## Registro de auditoria independente
 Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 
