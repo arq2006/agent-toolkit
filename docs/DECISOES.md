@@ -45,6 +45,9 @@ PR #6 integrado na main (`f60e695`, HEAD aprovado `053d289`) com autorização e
 ## Decisões da GH-F1 (22/10/2026, Arthur)
 Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonnet com esforço médio por padrão; Codex como auditor independente quando disponível, planejado após a GH-F1.4 e antes da primeira escrita do piloto, sem ser exigido antes da GH-F1.1. **Um auditor Claude em contexto separado não substitui a auditoria independente do Codex.** Merge: autorização humana obrigatória e específica por PR, com execução delegável ao Claude; proteção de branch fica separada e bloqueada sem autorização especial. Sandbox local condicionado, **não criado**: [plans/sandbox-gh-f1.md](plans/sandbox-gh-f1.md).
 
+## ADR-011 — Isolamento portátil do processo
+**Status:** proposta (GH-F1.8, identificador provisório; 24/10/2026). Ver [adr/ADR-011-isolamento-do-processo.md](adr/ADR-011-isolamento-do-processo.md). Direção aprovada por Arthur: Python 3.11+ (biblioteca padrão) e TOML em `integrations/isolation/`; STRONG só com validação efetiva do `doctor` (leitura/escrita, subprocessos, caminhos indiretos, hardlinks, fail-closed); coordenador autenticado fora do sandbox não é isolamento integral. Spike manual (Arch, 24/10) comprovou bubblewrap e srt sem sudo; hardlinks preexistentes são limitação confirmada. **Nada implementado e nenhum ambiente é STRONG.** GH-F1.5 preservada; GH-F1.6 bloqueada.
+
 ## Registro de auditoria independente
 Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 

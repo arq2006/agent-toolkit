@@ -13,6 +13,7 @@
 | [materializacao-claude-code.md](materializacao-claude-code.md) | Procedimento e evidências da materialização em `.claude/agents/` (GH-F1.4) |
 | [pesquisas/claude-code-materializacao-2026-10-22.md](pesquisas/claude-code-materializacao-2026-10-22.md) | Pesquisa da documentação do Claude Code (GH-F1.3) |
 | [adr/ADR-010-materializacao-em-claude-code.md](adr/ADR-010-materializacao-em-claude-code.md) | Proposta de materialização em `.claude/` |
+| [adr/ADR-011-isolamento-do-processo.md](adr/ADR-011-isolamento-do-processo.md) | Proposta de isolamento portátil do processo (GH-F1.8, provisório); nada implementado, nada STRONG |
 | [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md) | Estudo da futura GH-F1.7 (orquestrador e 12 especialistas), não aprovada |
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
