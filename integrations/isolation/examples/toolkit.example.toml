@@ -1,0 +1,16 @@
+# Exemplo sanitizado (GH-F1.8, ADR-011). Copie para fora do repositório e ajuste.
+# A pasta autorizada é escolhida por você, nunca pela IA: caminho absoluto, sem symlinks,
+# que não seja a raiz, a sua home nem um diretório acima dela.
+version = 1
+
+[authorized]
+dir = "/caminho/absoluto/da/pasta-autorizada"
+
+[auth]
+# "none" ou "claude-ai-outside-boundary" (coordenador autenticado FORA da fronteira:
+# não é isolamento integral e nunca resulta em STRONG).
+mode = "none"
+
+[network]
+# "deny" (padrão recomendado) ou "allowlist" com hosts explícitos em `allow`.
+mode = "deny"
