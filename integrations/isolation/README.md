@@ -25,7 +25,9 @@ Testes (diretórios temporários fictícios): `python3 -I -m unittest discover -
   Recebe JSON estrito de `read` ou `list`, limita tamanho, rejeita campos e
   operacoes inesperados e usa exclusivamente `pathguard` para ler/listar.
   Antes de cada solicitacao, `scan_tree` recusa a arvore se detectar symlinks,
-  hardlinks ou objetos especiais. Os testes usam fixtures ficticias e cobrem
+  hardlinks ou objetos especiais. Listagem e varredura sao incrementais, com
+  limites de entradas/profundidade e rejeicao antecipada de surrogates Unicode.
+  Os testes usam fixtures ficticias e cobrem
   negacoes. **Nao e mitigacao para Read/Edit nativos**, nem elimina bind mounts
   do mesmo dispositivo ou TOCTOU. Sem SRT e sem coordenador/controle de permissoes
   integrado, **nada e autorizado**. Detalhes e gates em
