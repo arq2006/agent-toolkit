@@ -77,10 +77,13 @@ def plan_batch(policy, assignments):
             _block(item, "AMBIGUOUS_INTRA_TASK_PATHS")
         prepared.append((item, request, paths))
 
-    # Conflicts must be symmetric and independent of input order.
+    # Snapshot candidacy before mutating results. A conflict on pair A/B
+    # cannot hide another collision on pair A/C. Order must not change gates.
+    candidate = [_candidate(item["route"]) for item, _, _ in prepared]
     for i, (left, lr, lp) in enumerate(prepared):
-        for right, rr, rp in prepared[i + 1:]:
-            if not (_candidate(left["route"]) and _candidate(right["route"])):
+        for j in range(i + 1, len(prepared)):
+            right, rr, rp = prepared[j]
+            if not (candidate[i] and candidate[j]):
                 continue
             # Separate worktrees and Git branches for concurrent writers.
             if lr["action"] == "write" and rr["action"] == "write":
