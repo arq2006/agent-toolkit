@@ -292,6 +292,94 @@ class CooperativeFreezeTests(unittest.TestCase):
         self.assertEqual(report["exit_code"], 2)
         self.assertIn("PLATFORM_NOT_VERIFIED", report["reasons"])
 
+    def test_module_import_without_fcntl_still_reports_blocked(self):
+        # Simulate a Windows import on the Linux test host: loading this
+        # diagnostic must not fail before run_synthetic can refuse.
+        import builtins
+        import importlib.util
+        real_import = builtins.__import__
+        def import_without_fcntl(name, *args, **kwargs):
+            if name == "fcntl":
+                raise ImportError("simulated unavailable POSIX module")
+            return real_import(name, *args, **kwargs)
+        spec = importlib.util.spec_from_file_location(
+            "_gh_f1_17_missing_fcntl", F.__file__)
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch("builtins.__import__",
+                        side_effect=import_without_fcntl):
+            spec.loader.exec_module(module)
+        self.assertIsNone(module.fcntl)
+        with mock.patch.object(module.sys, "platform", "win32"), \
+             mock.patch.object(module.L, "create_fixture",
+                               side_effect=AssertionError("fixture")):
+            report = module.run_synthetic()
+        self.assertEqual(report["exit_code"], 2)
+        self.assertEqual(report["readiness"], "BLOCKED")
+        self.assertEqual(report["strong"], "UNAVAILABLE")
+        self.assertIn("PLATFORM_NOT_VERIFIED", report["reasons"])
+        self.assertTrue(all(x["observation"] == "NOT_VERIFIED"
+                            for x in report["observations"]))
+
+    def test_linux_without_fcntl_refuses_before_fixture(self):
+        with mock.patch.object(F, "fcntl", None), \
+             mock.patch.object(F.sys, "platform", "linux"), \
+             mock.patch.object(F.L, "create_fixture",
+                               side_effect=AssertionError("fixture")):
+            report = F.run_synthetic()
+        self.assertEqual(report["exit_code"], 2)
+        self.assertIn("PLATFORM_NOT_VERIFIED", report["reasons"])
+        self.assertTrue(all(row["observation"] == "NOT_VERIFIED"
+                            for row in report["observations"]))
+
+    def test_cooperative_thread_start_failure_is_not_verified(self):
+        with mock.patch.object(F.threading.Thread, "start",
+                               side_effect=RuntimeError("resource limit")), \
+             mock.patch.object(F.P, "stage_snapshot",
+                               side_effect=AssertionError("staged")):
+            self.assertEqual(F._writer_waits(), "NOT_VERIFIED")
+
+    def test_noncooperative_thread_start_failure_never_joins_unstarted(self):
+        with mock.patch.object(F.threading.Thread, "start",
+                               side_effect=RuntimeError("resource limit")), \
+             mock.patch.object(F.threading.Thread, "join",
+                               side_effect=AssertionError("joined unstarted")):
+            self.assertEqual(F._uncooperative_bypass(), "NOT_VERIFIED")
+
+    def test_cooperative_thread_constructor_failure_is_not_verified(self):
+        with mock.patch.object(F.threading, "Thread",
+                               side_effect=RuntimeError("resource limit")):
+            self.assertEqual(F._writer_waits(), "NOT_VERIFIED")
+
+    def test_noncooperative_thread_constructor_failure_is_not_verified(self):
+        with mock.patch.object(F.threading, "Thread",
+                               side_effect=RuntimeError("resource limit")):
+            self.assertEqual(F._uncooperative_bypass(), "NOT_VERIFIED")
+
+    def test_start_failure_in_full_report_keeps_both_cases_incomplete(self):
+        with mock.patch.object(F.threading.Thread, "start",
+                               side_effect=RuntimeError("resource limit")):
+            report = F.run_synthetic()
+        self.assertEqual(report["exit_code"], 2)
+        observations = {row["id"]: row["observation"]
+                        for row in report["observations"]}
+        self.assertEqual(observations["cooperative_writer_waits"], "NOT_VERIFIED")
+        self.assertEqual(observations["uncooperative_writer_bypass"],
+                         "NOT_VERIFIED")
+        self.assertIn("SYNTHETIC_EVIDENCE_INCOMPLETE", report["reasons"])
+        self.assertFalse(report["agent_execution_authorized"])
+
+    def test_unexpected_case_runtime_error_never_escapes_report(self):
+        def fail():
+            raise RuntimeError("thread-unavailable-fake-secret")
+        with mock.patch.dict(F.CASES, {
+                case: fail for case in F.EXPECTED}, clear=True):
+            report = F.run_synthetic()
+        self.assertEqual(report["exit_code"], 2)
+        self.assertIn("SYNTHETIC_EVIDENCE_INCOMPLETE", report["reasons"])
+        self.assertTrue(all(row["observation"] == "NOT_VERIFIED"
+                            for row in report["observations"]))
+        self.assertNotIn("thread-unavailable-fake-secret", json.dumps(report))
+
     def test_cli_rejects_no_synthetic_flag_and_arbitrary_paths(self):
         for argv in ([], ["--workspace", "/project"], ["--path", "/tmp"],
                      ["--config", "/secret"]):
