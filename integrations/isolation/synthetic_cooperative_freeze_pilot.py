@@ -7,13 +7,17 @@ Always exit 2; STRONG and every agent/file/cloud permission remain BLOCKED.
 """
 import argparse
 import errno
-import fcntl
 import json
 import os
 import stat
 import sys
 import threading
 from unittest import mock
+
+try:
+    import fcntl  # POSIX only; CLI must import and refuse safely elsewhere.
+except ImportError:
+    fcntl = None
 
 import linux_openat2_guard as G
 import pathguard
@@ -138,8 +142,12 @@ def _writer_waits():
                     os.close(fd)
                 done.set()
 
-        t = threading.Thread(target=writer, daemon=True)
-        t.start()
+        try:
+            t = threading.Thread(target=writer, daemon=True)
+            t.start()
+        except RuntimeError:
+            # No thread was started: refuse without staging or joining it.
+            return "NOT_VERIFIED"
         original = P.stage_snapshot
         observed_during = [False]
 
@@ -244,14 +252,21 @@ def _uncooperative_bypass():
                 done.set()
 
         t = None
+        started = False
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            t = threading.Thread(target=writer, daemon=True)
-            t.start()
+            try:
+                t = threading.Thread(target=writer, daemon=True)
+                t.start()
+                started = True
+            except RuntimeError:
+                # Thread.start() may fail under resource pressure; never
+                # join an unstarted thread or misclassify as a passing canary.
+                return "NOT_VERIFIED"
             complete_while_locked = done.wait(WAIT)
         finally:
             os.close(fd)
-            if t is not None:
+            if started:
                 t.join(WAIT)
         return ("ADVISORY_BYPASS_REPRODUCED"
                 if complete_while_locked and not t.is_alive()
@@ -306,7 +321,9 @@ def run_synthetic():
         ],
         "exit_code": 2,
     }
-    if sys.platform != "linux":
+    if sys.platform != "linux" or fcntl is None:
+        # Importing this module on Windows must still produce a closed
+        # diagnostic report, rather than failing at import time.
         report["observations"] = classify({})
         report["reasons"].append("PLATFORM_NOT_VERIFIED")
         return report
@@ -314,8 +331,8 @@ def run_synthetic():
     for case, fn in CASES.items():
         try:
             observed[case] = fn()
-        except (OSError, ValueError, G.Openat2Denied, pathguard.PathGuardError,
-                P.SnapshotRefused):
+        except (OSError, RuntimeError, ValueError, G.Openat2Denied,
+                pathguard.PathGuardError, P.SnapshotRefused):
             observed[case] = "NOT_VERIFIED"
     report["observations"] = classify(observed)
     if any(x["observation"] == "NOT_VERIFIED" for x in report["observations"]):
