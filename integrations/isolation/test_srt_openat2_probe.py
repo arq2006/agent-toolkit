@@ -30,6 +30,54 @@ class SrtOpenat2ProbeTests(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(fx.external)),
                              ["secret.txt", "writable_target.txt"])
 
+    def test_stage_guard_reads_full_module_after_short_reads(self):
+        with L.create_fixture() as fx:
+            root = R.stage_fixture(fx)
+            source = os.path.join(os.path.dirname(P.__file__), P.GUARD_FILE)
+            with open(source, "rb") as stream:
+                expected = stream.read()
+            real_read = os.read
+            calls = []
+
+            def short_read(fd, requested):
+                calls.append(requested)
+                return real_read(fd, min(17, requested))
+
+            with mock.patch.object(P.os, "read", side_effect=short_read):
+                P.stage_guard(root)
+            with open(os.path.join(root, P.GUARD_FILE), "rb") as stream:
+                self.assertEqual(stream.read(), expected)
+            self.assertGreater(len(calls), 2)
+
+    def test_stage_guard_refuses_premature_eof_after_partial_copy(self):
+        with L.create_fixture() as fx:
+            root = R.stage_fixture(fx)
+            with mock.patch.object(P.os, "read", side_effect=[b"short", b""]):
+                with self.assertRaises(P.ProbeRefused) as denied:
+                    P.stage_guard(root)
+            self.assertEqual(str(denied.exception), "module_changed")
+            self.assertFalse(os.path.exists(os.path.join(root, P.GUARD_FILE)))
+
+    def test_stage_guard_denies_growth_beyond_128_kib(self):
+        with L.create_fixture() as fx:
+            root = R.stage_fixture(fx)
+            # O tamanho validado via fstat pode ficar obsoleto durante a cópia.
+            with mock.patch.object(P.os, "read", side_effect=lambda _fd, requested: b"x" * requested):
+                with self.assertRaises(P.ProbeRefused) as denied:
+                    P.stage_guard(root)
+            self.assertEqual(str(denied.exception), "module_too_large")
+            self.assertFalse(os.path.exists(os.path.join(root, P.GUARD_FILE)))
+
+    def test_stage_guard_denies_error_after_partial_copy(self):
+        with L.create_fixture() as fx:
+            root = R.stage_fixture(fx)
+            with mock.patch.object(P.os, "read",
+                                   side_effect=[b"partial", OSError("synthetic I/O error")]):
+                with self.assertRaises(P.ProbeRefused) as denied:
+                    P.stage_guard(root)
+            self.assertEqual(str(denied.exception), "staging_failed")
+            self.assertFalse(os.path.exists(os.path.join(root, P.GUARD_FILE)))
+
     def test_classification_requires_kernel_and_srt_controls(self):
         r = {
             "inside": {"ok": True, "text": "MARKER"},
