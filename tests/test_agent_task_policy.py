@@ -289,6 +289,61 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(P.evaluate(rule, task(paths=[file("project/src/a.py")]))
                          ["route"], "LOCAL_PROPOSED")
 
+    def test_readonly_only_workspace_allows_planner_and_auditor_proposals(self):
+        rule = policy()
+        rule["editable"] = []
+        for role in ("planner", "auditor"):
+            request = task(role=role, action="read",
+                           paths=[file("project/docs/README.md")])
+            result = P.evaluate(rule, request)
+            self.assertEqual(result["route"], "LOCAL_PROPOSED")
+            self.assertTrue(result["textual_scope_valid"])
+            self.assertFalse(result["agent_execution_authorized"])
+            self.assertFalse(result["file_operations_authorized"])
+            self.assertFalse(result["filesystem_isolation_verified"])
+
+    def test_readonly_only_workspace_cannot_propose_writes(self):
+        rule = policy()
+        rule["editable"] = []
+        for role in ("implementer", "planner", "auditor"):
+            result = P.evaluate(rule, task(role=role, action="write",
+                                           paths=[file("project/docs/README.md")]))
+            self.assertEqual(result["route"], "BLOCKED")
+            self.assertFalse(result["textual_scope_valid"])
+            self.assertFalse(result["file_operations_authorized"])
+
+    def test_readonly_only_workspace_still_blocks_out_of_scope_and_protected(self):
+        rule = policy()
+        rule["editable"] = []
+        for selected in ("project/src/app.py", "project/docs/private/secret.txt",
+                         "project/docs/.env"):
+            result = P.evaluate(rule, task(role="planner", action="read",
+                                           paths=[file(selected)]))
+            self.assertEqual(result["route"], "BLOCKED")
+            self.assertFalse(result["textual_scope_valid"])
+
+    def test_readonly_only_workspace_cloud_requires_separate_approvals(self):
+        rule = policy()
+        rule["editable"] = []
+        result = P.evaluate(rule, task(
+            role="auditor", action="read", paths=[file("project/docs/README.md")],
+            provider="cloud", complexity="critical", estimated_cloud_cents=10))
+        self.assertEqual(result["route"], "CLOUD_REVIEW_REQUIRED")
+        self.assertIn("OWNER_APPROVAL_REQUIRED", result["reasons"])
+        self.assertIn("SEPARATE_DATA_TRANSFER_APPROVAL_REQUIRED", result["reasons"])
+        self.assertFalse(result["cloud_call_authorized"])
+        self.assertFalse(result["data_transfer_authorized"])
+
+    def test_empty_editable_and_readonly_grants_are_rejected(self):
+        for protected in ([], [entry("project/src/locked")]):
+            rule = policy()
+            rule["editable"] = []
+            rule["read_only"] = []
+            rule["protected"] = protected
+            with self.assertRaisesRegex(P.PolicyDenied, "empty_grants"):
+                P.evaluate(rule, task(action="read", role="planner",
+                                      paths=[file("project/docs/README.md")]))
+
     def test_demo_never_grants_execution(self):
         r = P.demo()
         self.assertEqual(r["workspace_id"], "synthetic-demo")
