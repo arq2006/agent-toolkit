@@ -34,6 +34,18 @@ Testes (diretórios temporários fictícios): `python3 -I -m unittest discover -
   [GH-F1.8 — read-only executor](../../docs/plans/GH-F1-8-readonly-executor-boundary.md).
 - Testes propostos: `python3 -I -m unittest discover -s integrations/isolation -p 'test_readonly_executor.py' -v`.
 
+## PR6 / GH-F1.9: guarda experimental `openat2` do Linux
+
+- `linux_openat2_guard.py`: experimento isolado com `openat2(2)` e
+  `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS |
+  RESOLVE_NO_XDEV`. Não substitui `pathguard` e **não** autoriza Claude
+  ou STRONG. Requer FD de raiz explicitamente aprovado pelo chamador.
+- `srt_openat2_probe.py`: prova da syscall dentro do SRT, **exclusivamente**
+  em fixture nova e fictícia (`--synthetic-only`). Sem `sudo`, mounts,
+  workspaces reais, agentes ou permissão de escrita. Casos bind mount reais
+  seguem `NOT_TESTED`. Testes não têm valor de prova até execução no Arch.
+  Plano: [GH-F1.9 — openat2](../../docs/plans/GH-F1-9-openat2-kernel-path-boundary.md).
+
 ## PR5: integração SRT read-only **somente fictícia** (ainda sem agentes)
 
 - `srt_readonly_pilot.py`: CLI fechada (`--synthetic-only`) para executar
