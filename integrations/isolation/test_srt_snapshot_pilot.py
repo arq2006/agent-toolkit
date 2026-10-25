@@ -184,6 +184,43 @@ class SnapshotPilotTests(unittest.TestCase):
         self.assertTrue(any(c["status"] == "FAIL" for c in
                             P.classify(r, True, True, True)))
 
+    def test_classification_rejects_numeric_true_in_native_read(self):
+        # JSON numeric values must not pass merely because Python 1 == True.
+        for opened, matched in ((1, 1), (1, True), (True, 1),
+                                (1.0, 1.0)):
+            with self.subTest(opened=opened, matched=matched):
+                r = good_result()
+                r["native_snapshot_read"] = {
+                    "opened": opened, "matched": matched}
+                checks = P.classify(r, True, True, True)
+                self.assertIn(
+                    {"id": "native_snapshot_read", "status": "FAIL"}, checks)
+                self.assertFalse(all(c["status"] == "PASS" for c in checks))
+
+    def test_classification_rejects_native_read_unexpected_schema(self):
+        for value in ({"opened": True, "matched": True, "extra": True},
+                      {"opened": True},
+                      {"matched": True},
+                      ["opened", "matched"], None, True, 1):
+            with self.subTest(value=value):
+                r = good_result()
+                r["native_snapshot_read"] = value
+                self.assertIn(
+                    {"id": "native_snapshot_read", "status": "FAIL"},
+                    P.classify(r, True, True, True))
+
+    def test_classification_rejects_native_read_nonboolean_values(self):
+        for opened, matched in (("true", True), (True, "true"),
+                                (False, True), (True, False),
+                                (0, True), (True, 0)):
+            with self.subTest(opened=opened, matched=matched):
+                r = good_result()
+                r["native_snapshot_read"] = {
+                    "opened": opened, "matched": matched}
+                self.assertIn(
+                    {"id": "native_snapshot_read", "status": "FAIL"},
+                    P.classify(r, True, True, True))
+
     def test_classification_denies_native_external_read(self):
         r = good_result()
         r["native_external_denied"] = False
