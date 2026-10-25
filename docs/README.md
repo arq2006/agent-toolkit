@@ -19,6 +19,7 @@
 | [plans/GH-F1-9-openat2-kernel-path-boundary.md](plans/GH-F1-9-openat2-kernel-path-boundary.md) | Experimento Linux openat2 contra symlinks/mount traversal, com canário SRT sintético e sem agentes |
 | [plans/GH-F1-10-agent-task-policy-preview.md](plans/GH-F1-10-agent-task-policy-preview.md) | Pré-admissão de tarefas: escopo textual, local-first e revisão obrigatória antes de nuvem (sem execução de agentes) |
 | [plans/GH-F1-11-offline-task-batch-preview.md](plans/GH-F1-11-offline-task-batch-preview.md) | Pré-coordenação de lotes fictícios, conflitos de arquivos e tags de worktree/branch; nenhuma execução de agentes |
+| [plans/GH-F1-12-delegation-catalog-preview.md](plans/GH-F1-12-delegation-catalog-preview.md) | Catálogo simbólico dos 12 domínios e contratos de delegação hierárquica sem instalação ou execução de agentes |
 | [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md) | Estudo da futura GH-F1.7 (orquestrador e 12 especialistas), não aprovada |
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
