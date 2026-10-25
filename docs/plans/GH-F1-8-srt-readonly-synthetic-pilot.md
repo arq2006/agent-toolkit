@@ -46,7 +46,12 @@ Arquivo: `integrations/isolation/srt_readonly_pilot.py`:
    arbitrário é aceito como argumento da CLI.
 5. Exige controle positivo de leitura/listagem, negativas para travessia
    de diretórios, caminho absoluto, requisição de escrita, leitura nativa
-   externa e escrita nativa dentro da pasta autorizada.
+   externa e escrita nativa dentro da pasta autorizada. **Além de recusar a
+   criação de arquivo novo**, tenta abrir e **sobrescrever** um arquivo
+   fictício preexistente (`r+b`), e **truncar** outro (`wb`). O supervisor
+   lê novamente os dois arquivos depois do subprocesso e exige que os bytes
+   originais permaneçam intactos; portanto, apenas capturar um erro depois
+   de um truncamento não é suficiente para declarar PASS.
 6. Instala na fixture fictícia, APÓS o controle positivo, um hardlink para
    um marcador externo fictício. Uma segunda execução deve recusar tanto
    o hardlink quanto uma leitura normal enquanto a árvore é insegura.
