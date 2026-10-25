@@ -193,7 +193,7 @@ def classify(observed):
     return [
         {"id": name, "observation": value if type(value) is str
          and value == EXPECTED[name] else "NOT_VERIFIED"}
-        for name, value in observed.items()
+        for name, value in ((key, observed[key]) for key in EXPECTED)
     ]
 
 
