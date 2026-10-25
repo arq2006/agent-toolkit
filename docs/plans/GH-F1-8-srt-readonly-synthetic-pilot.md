@@ -58,7 +58,10 @@ Arquivo: `integrations/isolation/srt_readonly_pilot.py`:
    A leitura **nativa** do hardlink é relatada como LIMITAÇÃO informativa,
    nunca considerada prova de segurança.
 7. Só retorna código 0 se **todos** os controles obrigatórios passarem.
-   Ausência de evidência, bloqueio de runtime, timeout ou exceção resultam em
+   A saída de canários é tratada como não confiável: JSON malformado ou
+   excessivamente aninhado (`RecursionError`) é descartado como evidência
+   inválida, sem traceback, e o piloto retorna código 2.
+   Ausência de evidência, bloqueio de runtime ou timeout também retornam
    código 2. Mesmo com código 0, a saída mantém:
    `STRONG = UNAVAILABLE`, `file_operations = BLOCKED_FOR_AGENTS` e
    `agent_execution_authorized = false`.
