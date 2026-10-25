@@ -11,8 +11,9 @@ import json
 import agent_task_policy as gate
 
 ASSIGNMENT_FIELDS = frozenset(("task", "agent_id", "branch_tag", "worktree_tag"))
-RESULT_AUTH_FIELDS = ("agent_execution_authorized", "file_operations_authorized",
-                      "cloud_call_authorized", "data_transfer_authorized")
+# Per GH-F1.7, these domains remain read-only/proposal until separate
+# safety procedures exist. Merely choosing the implementer role is not enough.
+READONLY_SPECIALTIES = frozenset(("database", "devops", "performance", "management"))
 
 
 def _ident(value):
@@ -69,6 +70,8 @@ def plan_batch(policy, assignments):
                 "branch_tag": branch_tag, "worktree_tag": worktree_tag,
                 "file_scope_verified": False, "git_state_verified": False,
                 "real_reservation_created": False}
+        if request["action"] == "write" and request["specialty"] in READONLY_SPECIALTIES:
+            _block(item, "SPECIALTY_WRITE_REQUIRES_SEPARATE_PROCEDURE")
         paths = tuple(path for path, kind in gate._validate_request(request))
         # A file and its apparent descendants cannot simultaneously be a
         # coherent request, even if both are called "file" by the caller.
