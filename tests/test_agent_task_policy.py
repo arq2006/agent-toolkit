@@ -14,20 +14,32 @@ P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
 
 
+def entry(path, kind="directory"):
+    return {"path": path, "kind": kind}
+
+
+def file(path):
+    return entry(path, "file")
+
+
 def policy():
-    return {"version": 1, "workspace_id": "synthetic-workspace",
-            "editable": ["project/src"], "read_only": ["project/docs"],
-            "protected": ["project/src/locked", "project/docs/private"],
+    return {"version": 2, "workspace_id": "synthetic-workspace",
+            "editable": [entry("project/src")], "read_only": [entry("project/docs")],
+            "protected": [entry("project/src/locked"), entry("project/docs/private")],
             "cloud_task_cap_cents": 50, "cloud_day_cap_cents": 200,
             "cloud_project_cap_cents": 600}
 
 
 def task(**changes):
     value = {"task_id": "TASK-001", "role": "implementer", "specialty": "backend",
-             "action": "write", "paths": ["project/src/app.py"],
+             "action": "write", "paths": [file("project/src/app.py")],
              "provider": "local", "complexity": "routine", "local_available": True,
              "estimated_cloud_cents": None, "spent_today_cents": 0,
              "spent_project_cents": 0}
+    if "paths" in changes:
+        # Convenience for existing single-file tests; explicit dicts retain kind.
+        changes["paths"] = [file(p) if type(p) is str else p
+                            for p in changes["paths"]]
     value.update(changes)
     return value
 
@@ -153,12 +165,12 @@ class PolicyTests(unittest.TestCase):
 
     def test_policy_rejects_overlapping_grants(self):
         rule = policy()
-        rule["read_only"] = ["project"]
+        rule["read_only"] = [entry("project")]
         with self.assertRaises(P.PolicyDenied):
             P.evaluate(rule, task())
 
     def test_policy_rejects_unknown_fields_or_invalid_root_id(self):
-        for change in ({"workspace_root": "/home/user"}, {"version": 2},
+        for change in ({"workspace_root": "/home/user"}, {"version": 1},
                        {"workspace_id": "/tmp/secrets"}):
             p = policy()
             p.update(change)
@@ -187,6 +199,95 @@ class PolicyTests(unittest.TestCase):
     def test_one_denied_path_stops_whole_task(self):
         r = self.evaluate(paths=["project/src/app.py", "project/src/locked/password"])
         self.assertEqual(r["route"], "BLOCKED")
+
+    def test_directory_request_with_no_protected_list_is_indeterminate(self):
+        rule = policy()
+        rule["editable"] = [entry("project")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        result = P.evaluate(rule, task(action="read", role="planner",
+                                       paths=[entry("project")]))
+        self.assertEqual(result["route"], "BLOCKED")
+        self.assertIn("DIRECTORY_CONTENTS_UNVERIFIED", result["reasons"])
+        self.assertFalse(result["textual_scope_valid"])
+        self.assertFalse(result["agent_execution_authorized"])
+
+    def test_directory_root_spoofed_as_file_is_indeterminate(self):
+        rule = policy()
+        rule["editable"] = [entry("project")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        result = P.evaluate(rule, task(action="read", role="planner",
+                                       paths=[file("project")]))
+        self.assertEqual(result["route"], "BLOCKED")
+        self.assertIn("DIRECTORY_CONTENTS_UNVERIFIED", result["reasons"])
+
+    def test_file_grant_matches_only_the_selected_file(self):
+        rule = policy()
+        rule["editable"] = [file("project/file.py")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        accepted = P.evaluate(rule, task(paths=[file("project/file.py")]))
+        self.assertEqual(accepted["route"], "LOCAL_PROPOSED")
+        rejected = P.evaluate(rule, task(paths=[file("project/file.py/child")]))
+        self.assertEqual(rejected["route"], "BLOCKED")
+        self.assertIn("WRITE_OUTSIDE_SELECTED_SCOPE", rejected["reasons"])
+        self.assertFalse(rejected["textual_scope_valid"])
+
+    def test_file_grant_does_not_select_child_for_read(self):
+        rule = policy()
+        rule["editable"] = [file("project/file.py")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        result = P.evaluate(rule, task(action="read", role="planner",
+                                       paths=[file("project/file.py/child")]))
+        self.assertEqual(result["route"], "BLOCKED")
+        self.assertIn("READ_OUTSIDE_SELECTED_SCOPE", result["reasons"])
+
+    def test_directory_request_cannot_be_granted_via_file_entry(self):
+        rule = policy()
+        rule["editable"] = [file("project/file.py")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        result = P.evaluate(rule, task(action="read", role="planner",
+                                       paths=[entry("project/file.py")]))
+        self.assertEqual(result["route"], "BLOCKED")
+        self.assertIn("DIRECTORY_CONTENTS_UNVERIFIED", result["reasons"])
+
+    def test_string_grants_and_invalid_entry_types_fail_closed(self):
+        cases = (["project/src"], [entry("project/src", "not-a-kind")],
+                 [{"path": "project/src", "kind": "directory", "approved": True}],
+                 [entry("project/src"), file("project/src")])
+        for editable in cases:
+            rule = policy()
+            rule["editable"] = editable
+            with self.assertRaises(P.PolicyDenied):
+                P.evaluate(rule, task())
+        for target in (["project/src/app.py"],
+                       [{"path": "project/src/app.py", "kind": "both"}],
+                       [{"path": "project/src/app.py", "kind": "file",
+                         "approved": True}]):
+            req = task()
+            req["paths"] = target
+            with self.assertRaises(P.PolicyDenied):
+                P.evaluate(policy(), req)
+
+    def test_directory_grant_still_accepts_individual_nonsecret_files(self):
+        rule = policy()
+        rule["editable"] = [entry("project")]
+        rule["read_only"] = []
+        rule["protected"] = []
+        result = P.evaluate(rule, task(paths=[file("project/app.py")]))
+        self.assertEqual(result["route"], "LOCAL_PROPOSED")
+        self.assertFalse(result["filesystem_isolation_verified"])
+
+    def test_nonoverlapping_file_grants_do_not_false_conflict(self):
+        rule = policy()
+        rule["editable"] = [file("project/src/a.py")]
+        rule["read_only"] = [file("project/src/b.py")]
+        rule["protected"] = []
+        self.assertEqual(P.evaluate(rule, task(paths=[file("project/src/a.py")]))
+                         ["route"], "LOCAL_PROPOSED")
 
     def test_demo_never_grants_execution(self):
         r = P.demo()
