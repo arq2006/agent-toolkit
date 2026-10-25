@@ -24,6 +24,8 @@ REQUEST_FIELDS = frozenset(("task_id", "role", "specialty", "action", "paths",
                             "estimated_cloud_cents", "spent_today_cents",
                             "spent_project_cents"))
 SENSITIVE_COMPONENTS = frozenset((".git", ".claude", ".ssh", ".env", "id_rsa", "id_ed25519"))
+ENTRY_FIELDS = frozenset(("path", "kind"))
+ENTRY_KINDS = frozenset(("file", "directory"))
 
 
 class PolicyDenied(ValueError):
@@ -59,14 +61,21 @@ def _path(value):
     return value
 
 
-def _paths(value, *, nonempty=False):
+def _entries(value, *, nonempty=False):
+    """Parse explicit file/directory declarations (still only untrusted text)."""
     if (type(value) is not list or len(value) > 32
             or (nonempty and not value)):
         raise PolicyDenied("invalid_paths")
-    result = tuple(_path(p) for p in value)
-    if len(set(result)) != len(result):
+    result = []
+    for entry in value:
+        _record(entry, ENTRY_FIELDS)
+        if type(entry["kind"]) is not str or entry["kind"] not in ENTRY_KINDS:
+            raise PolicyDenied("invalid_entry_kind")
+        result.append((_path(entry["path"]), entry["kind"]))
+    # Even changing an entry kind must not create two grants for one path.
+    if len({path for path, _ in result}) != len(result):
         raise PolicyDenied("duplicate_path")
-    return result
+    return tuple(result)
 
 
 def _money(value):
@@ -79,6 +88,14 @@ def _under(path, prefix):
     return path == prefix or path.startswith(prefix + "/")
 
 
+def _matches(path, kind, grant):
+    """File grants match exactly; directory grants may describe descendants."""
+    selected, selected_kind = grant
+    if selected_kind == "file":
+        return path == selected and kind == "file"
+    return _under(path, selected)
+
+
 def _sensitive(path):
     return any(p in SENSITIVE_COMPONENTS or p.startswith(".env.") or p.endswith(".pem")
                for p in path.split("/"))
@@ -86,17 +103,19 @@ def _sensitive(path):
 
 def validate_policy(policy):
     _record(policy, WORKSPACE_FIELDS)
-    if policy["version"] != 1 or type(policy["version"]) is not int:
+    if policy["version"] != 2 or type(policy["version"]) is not int:
         raise PolicyDenied("unsupported_policy")
     _name(policy["workspace_id"])
-    editable = _paths(policy["editable"], nonempty=True)
-    readonly = _paths(policy["read_only"])
-    protected = _paths(policy["protected"])
+    editable = _entries(policy["editable"], nonempty=True)
+    readonly = _entries(policy["read_only"])
+    protected = _entries(policy["protected"])
     for cap in ("cloud_task_cap_cents", "cloud_day_cap_cents", "cloud_project_cap_cents"):
         _money(policy[cap])
     # Overlapping grants can silently increase privileges; reject all ambiguous grants.
-    for a in editable:
-        if any(_under(a, r) or _under(r, a) for r in readonly):
+    for a, ak in editable:
+        if any(a == r or (rk == "directory" and _under(a, r))
+               or (ak == "directory" and _under(r, a))
+               for r, rk in readonly):
             raise PolicyDenied("overlapping_grants")
     return editable, readonly, protected
 
@@ -111,7 +130,7 @@ def _validate_request(req):
             raise PolicyDenied("invalid_request")
     if type(req["local_available"]) is not bool:
         raise PolicyDenied("invalid_request")
-    paths = _paths(req["paths"], nonempty=True)
+    paths = _entries(req["paths"], nonempty=True)
     for key in ("spent_today_cents", "spent_project_cents"):
         _money(req[key])
     estimate = req["estimated_cloud_cents"]
@@ -127,16 +146,24 @@ def evaluate(policy, request):
     editable, readonly, protected = validate_policy(policy)
     paths = _validate_request(request)
     reasons = []
-    for path in paths:
+    for path, kind in paths:
         if _sensitive(path) or any(_under(path, p) or _under(p, path)
-                                   for p in protected):
+                                   for p, _ in protected):
             reasons.append("PROTECTED_PATH")
+        elif (kind == "directory" or any(
+                selected_kind == "directory" and path == selected
+                for selected, selected_kind in editable + readonly)):
+            # Without inspecting the filesystem, a directory can hide .env,
+            # .git and other protected descendants. Never approve the tree.
+            # Exact directory-root paths are refused even if mislabeled file.
+            reasons.append("DIRECTORY_CONTENTS_UNVERIFIED")
         elif request["action"] == "write":
             if request["role"] != "implementer":
                 reasons.append("ROLE_CANNOT_WRITE")
-            elif not any(_under(path, p) for p in editable):
+            elif not any(_matches(path, kind, grant) for grant in editable):
                 reasons.append("WRITE_OUTSIDE_SELECTED_SCOPE")
-        elif not any(_under(path, p) for p in editable + readonly):
+        elif not any(_matches(path, kind, grant)
+                     for grant in editable + readonly):
             reasons.append("READ_OUTSIDE_SELECTED_SCOPE")
     reasons = sorted(set(reasons))
     route = "BLOCKED"
@@ -164,7 +191,8 @@ def evaluate(policy, request):
         "mode": "advisory_only", "workspace_id": policy["workspace_id"],
         "task_id": request["task_id"], "route": route,
         "textual_scope_valid": not any(x in reasons for x in
-            ("PROTECTED_PATH", "ROLE_CANNOT_WRITE", "WRITE_OUTSIDE_SELECTED_SCOPE",
+            ("PROTECTED_PATH", "DIRECTORY_CONTENTS_UNVERIFIED",
+             "ROLE_CANNOT_WRITE", "WRITE_OUTSIDE_SELECTED_SCOPE",
              "READ_OUTSIDE_SELECTED_SCOPE")),
         "reasons": sorted(set(reasons)),
         "local_first": True, "cloud_default": "DENY",
@@ -177,13 +205,15 @@ def evaluate(policy, request):
 
 def demo():
     """Entirely invented workspace and task. No caller-supplied path or model calls."""
-    policy = {"version": 1, "workspace_id": "synthetic-demo",
-              "editable": ["ExampleProject/src"], "read_only": ["ExampleProject/docs"],
-              "protected": ["ExampleProject/src/locked"],
+    policy = {"version": 2, "workspace_id": "synthetic-demo",
+              "editable": [{"path": "ExampleProject/src", "kind": "directory"}],
+              "read_only": [{"path": "ExampleProject/docs", "kind": "directory"}],
+              "protected": [{"path": "ExampleProject/src/locked", "kind": "directory"}],
               "cloud_task_cap_cents": 50, "cloud_day_cap_cents": 200,
               "cloud_project_cap_cents": 600}
     task = {"task_id": "TASK-DEMO", "role": "implementer", "specialty": "backend",
-            "action": "write", "paths": ["ExampleProject/src/api.py"],
+            "action": "write",
+            "paths": [{"path": "ExampleProject/src/api.py", "kind": "file"}],
             "provider": "local", "complexity": "routine", "local_available": True,
             "estimated_cloud_cents": None, "spent_today_cents": 0,
             "spent_project_cents": 0}
