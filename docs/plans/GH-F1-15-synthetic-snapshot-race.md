@@ -58,7 +58,16 @@ python3 integrations/isolation/srt_snapshot_race_probe.py --synthetic-only --jso
 echo "Código do canário: $status"
 ```
 
-Esperado no Arch Linux: seis casos `PASS`, código `0`, `STRONG=UNAVAILABLE`, `readiness=BLOCKED`. Não há necessidade de sudo ou execução do SRT; **não usar dados reais**, não executar em repositórios externos. Um `FAIL` ou `2` exige correção antes de qualquer merge.
+Esperado no Arch Linux: seis casos `PASS`, código `0`, `STRONG=UNAVAILABLE`, `readiness=BLOCKED`. O canário de corrida não inicia SRT nem exige sudo; **não usar dados reais**, não executar em repositórios externos. Um `FAIL` ou `2` exige correção antes de qualquer merge.
+
+**Regressão obrigatória do piloto SRT GH-F1.14:** como `stage_snapshot` recebeu uma segunda leitura, repetir o ensaio de 12 controles com SRT real na fixture sintética, sem confundi-lo com isolamento de agentes:
+
+```fish
+python3 integrations/isolation/srt_snapshot_pilot.py --synthetic-only --json
+echo "Código do SRT sintético: $status"
+```
+
+Esperado: 12/12 `PASS`, código `0`, `readiness=BLOCKED`, `strong=UNAVAILABLE`. Esse teste **não altera** os bloqueios da GH-F1.13.
 
 ## Gates
 
