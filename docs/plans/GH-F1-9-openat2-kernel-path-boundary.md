@@ -99,8 +99,10 @@ Referências públicas:
   crescimento posterior ao `fstat` e erro depois de leitura parcial.
   Se syscall indisponível no host de teste, casos dependentes dela são
   **SKIP**, nunca computados como prova de funcionamento.
-- `test_srt_openat2_probe.py`: 10 testes de fixture, contrato fechado,
+- `test_srt_openat2_probe.py`: 14 testes de fixture, contrato fechado,
   fake SRT (deve reprovar), nonce, timeout, resultado malformado e gates.
+  Quatro regressões cobrem cópia completa sob leituras parciais,
+  EOF prematuro, crescimento acima do limite de 128 KiB e erro de I/O.
 - Não altera `pathguard.py`, `readonly_executor.py`, `srt_launcher.py`,
   `srt_readonly_pilot.py`, `toolkit_doctor.py`, `.claude/` ou agentes.
 
@@ -125,11 +127,17 @@ Código 0 significa **somente** que os canários obrigatórios funcionaram
 naquele runtime. Espera-se `bind_mount_test=NOT_TESTED_...` em todo caso.
 Não é autorizado lançar agentes; não usar dados pessoais ou projetos reais.
 
-**Primeira auditoria Codex no HEAD `51f7528` (24/10/2026):** 1 achado P2:
-  uma chamada única a `os.read` podia retornar só um prefixo do arquivo.
-  Correção aplicada: leitura incremental até EOF/limite, com testes extras.
-  Reteste local e nova auditoria independente ainda são necessários.
+**Auditorias Codex do PR #20 em 24/10/2026:**
+
+- Primeira, HEAD `51f7528`: 1 P2 em `linux_openat2_guard.read_bytes`
+  (leitura curta silenciosa). Corrigido e validado pelo operador no HEAD
+  `4f69c5f`: suíte de 185 testes OK e canários SRT 9/9 PASS.
+- Segunda, HEAD `4f69c5f`: 1 P2 em `srt_openat2_probe.stage_guard`:
+  cópia incompleta do módulo devido a leitura curta, produzindo falso FAIL.
+  Correção: leitura até EOF com limite de 128 KiB + 1 e validação da
+  contagem de bytes contra `fstat`; quatro testes de regressão adicionados.
+  **Ainda requer reteste do novo HEAD e terceira auditoria Codex.**
 
 **Antes de eventual merge:** novos testes Arch (com contagem de SKIP), canário
-real SRT no HEAD corrigido, segunda auditoria Codex e revisão humana. Merge apenas com
+real SRT no HEAD corrigido, terceira auditoria Codex e revisão humana. Merge apenas com
 nova autorização explícita.
