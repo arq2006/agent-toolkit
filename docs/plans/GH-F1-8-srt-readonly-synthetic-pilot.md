@@ -72,9 +72,10 @@ limitado ao processo de canário iniciado explicitamente pelo operador.
 ## Testes
 
 Novo `test_srt_readonly_pilot.py` cobre política read-only, fixture segura,
-argumentos fechados, nonce de saída, negação em subprocesso falso/sem
-sandbox, classificações fail-closed, plataforma recusada e obrigatoriedade
-de `--synthetic-only`.
+argumentos fechados, nonce de saída, JSON recursivo malformado, duas
+formas de escrita em arquivos fictícios preexistentes, verificação dos bytes
+pelo supervisor, negação em subprocesso falso/sem sandbox, classificações
+fail-closed, plataforma recusada e obrigatoriedade de `--synthetic-only`.
 
 O SRT **falso** usado em testes de unidade não prova isolamento; um falso
 runtime que executa fora da fronteira deve **falhar** nos controles.
