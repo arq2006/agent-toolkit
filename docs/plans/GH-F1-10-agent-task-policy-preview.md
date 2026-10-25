@@ -16,18 +16,18 @@ Antes da interface visual, consolidar contratos determinísticos de admissão pa
 ## Entrega deste PR
 
 - `scripts/agent_task_policy.py`: função pura `evaluate(policy, request)`, sem leitura de arquivos, rede, subprocesso ou modelos. Os campos de autorização da resposta são sempre `false`. CLI aceita apenas `--synthetic-only [--json]`, produzindo um exemplo inventado.
-- `tests/test_agent_task_policy.py`: **28 testes** com políticas fictícias, limites por prefixo de diretório, ancestrais de diretórios protegidos, credenciais como `.env` em subpastas, papéis somente-leitura, orçamento, proibição de fallback automático para nuvem e campos de autorização forjados.
+- `tests/test_agent_task_policy.py`: **36 testes** com políticas fictícias, regras de arquivo/diretório, diretórios não verificáveis, privilégios de caminho, ancestrais protegidos, credenciais `.env` em subpastas, papéis somente-leitura, orçamento, proibição de fallback automático para nuvem e campos de autorização forjados.
 - Plano técnico e link no índice de documentação.
 
 ### Contrato consultivo
 
 **Policy** (objeto com chaves exatas):
 
-`version=1`, `workspace_id` (identificador simbólico, **não caminho real**), listas `editable`, `read_only`, `protected` de caminhos **relativos e puramente textuais**, e valores de demonstração em centavos de dólar: `cloud_task_cap_cents`, `cloud_day_cap_cents`, `cloud_project_cap_cents`.
+`version=2`, `workspace_id` (identificador simbólico, **não caminho real**), listas `editable`, `read_only`, `protected` de objetos **tipados** `{ "path": "caminho/relativo", "kind": "file" | "directory" }`, e valores de demonstração em centavos de dólar: `cloud_task_cap_cents`, `cloud_day_cap_cents`, `cloud_project_cap_cents`.
 
 **Request** (objeto com chaves exatas):
 
-`task_id`, `role` (somente `planner`, `implementer`, `auditor`), `specialty` (domínios futuros), `action` (`read`, `write`), `paths`, `provider` (`local`, `cloud`), `complexity`, `local_available`, `estimated_cloud_cents`, `spent_today_cents`, `spent_project_cents`.
+`task_id`, `role` (somente `planner`, `implementer`, `auditor`), `specialty` (domínios futuros), `action` (`read`, `write`), `paths` (objetos `{ "path": "...", "kind": "file" | "directory" }`), `provider` (`local`, `cloud`), `complexity`, `local_available`, `estimated_cloud_cents`, `spent_today_cents`, `spent_project_cents`.
 
 Os domínios de `specialty` são **somente taxonomia**, não instâncias de agentes. Valores financeiros do exemplo são ilustrativos para **API faturada em USD**, não são orçamentos aprovados pelo usuário nem representam cotas de assinaturas. O protótipo não mede tokens, desempenho, gastos ou disponibilidade efetiva de Ollama/LM Studio.
 
@@ -44,7 +44,7 @@ Os domínios de `specialty` são **somente taxonomia**, não instâncias de agen
 - `budget_ledger_verified=false`
 - `reservation_verified=false`
 
-O protótipo compara **somente strings relativas**. Ele não resolve caminhos de disco, symlinks, hardlinks, bind mounts, TOCTOU, permissões do kernel, worktrees, credenciais, consumo real, SRT ou autorizações humanas. A interface futura de escolha de `ArquivosEditaveis/` terá de delegar os caminhos a uma fronteira confiável independente, devidamente testada. **Não usar `textual_scope_valid` como controle de acesso.**
+O protótipo compara **somente caminhos relativos e os tipos declarados**. Um grant `file` casa **exatamente** o arquivo escolhido, nunca seus descendentes. Um grant `directory` só pode produzir proposta consultiva para pedidos de **arquivos individuais** abaixo dele. Pedidos sobre diretórios inteiros são `BLOCKED` com `DIRECTORY_CONTENTS_UNVERIFIED`, mesmo com `protected=[]`, pois podem conter `.env`/segredos invisíveis ao protótipo. Até um pedido incorretamente rotulado `file` que coincide exatamente com a raiz de um grant `directory` é recusado. Esse `kind` é **declaração não confiável**, não resultado de `stat` no filesystem; toda autorização real exige validação independente dos tipos e do conteúdo pelo executor efetivo. O protótipo não resolve caminhos de disco, symlinks, hardlinks, bind mounts, TOCTOU, permissões do kernel, worktrees, credenciais, consumo real, SRT ou autorizações humanas. A interface futura de escolha de `ArquivosEditaveis/` terá de delegar os caminhos a uma fronteira confiável independente, devidamente testada. **Não usar `textual_scope_valid` como controle de acesso.**
 
 Selecionar um diretório-ancestral de conteúdo protegido é recusado no preflight textual. Uma resposta local que contenha código jamais constitui permissão de gravar esse código no disco.
 
@@ -74,6 +74,6 @@ python3 -I -m unittest discover -s integrations/isolation -p 'test_*.py'
 git diff --check main...HEAD
 ```
 
-**Validação prévia da implementação em ambiente de desenvolvimento isolado:** 28/28 novos testes passaram e a demonstração fictícia manteve todas as autorizações `false`. **Não é evidência de SRT nem de execução de agentes.** O teste no Arch do operador e a auditoria Codex independente ainda estão pendentes.
+**Evidência por HEAD:** no HEAD anterior `b8618aa`, o operador aprovou 28/28 testes específicos, 104/104 testes gerais e 189/189 testes de isolamento no Arch. A **primeira auditoria Codex GPT-6 High** desse HEAD achou **2 P2**: (1) proposta para diretório que pode esconder segredos e (2) grant de arquivo tratado como diretório. A correção atual altera o contrato textual para `version=2`, adiciona campos `kind` e **8 testes de regressão** (36 específicos no total). **Nenhum teste novo ou segunda auditoria foi comprovado ainda para este HEAD.** A CLI permanece exclusivamente sintética e com todas as autorizações `false`.
 
 Antes de eventual merge: testes locais completos, auditoria Codex read-only com revisão dos achados, revisão humana e **nova autorização explícita** para aquele PR.
