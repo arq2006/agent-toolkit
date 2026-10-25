@@ -54,7 +54,7 @@ git diff --check main...HEAD
 git status --short
 ```
 
-**Esperado, ainda não executado no Arch:** **37 testes novos**, **188 gerais** e **353 de isolamento** (316 existentes + 37), com nenhum `SKIP` contado como prova positiva.
+**Esperado, ainda não executado no Arch:** **45 testes novos**, **188 gerais** e **361 de isolamento** (316 existentes + 45), com nenhum `SKIP` contado como prova positiva.
 
 **Canário separado:** seu código **2 é esperado** e não deve ser encadeado com `and` que exige zero.
 
@@ -63,11 +63,12 @@ python3 integrations/isolation/synthetic_cooperative_freeze_pilot.py --synthetic
 echo "Código do diagnóstico: $status"
 ```
 
-Esperadas cinco observações exatas acima, código 2 e todos os bloqueios preservados. Se uma vier `NOT_VERIFIED`, há evidência incompleta e a causa deve ser analisada antes de merge.
+Esperadas cinco observações exatas acima, código 2 e todos os bloqueios preservados. Se o sistema não possuir `fcntl` (como no Windows), o módulo pode ser importado e o diagnóstico retorna observações `NOT_VERIFIED` e código 2 sem tentar criar fixtures. Se a criação/inicialização de uma thread falhar (ex.: `RuntimeError` por limitação de recursos), os canários afetados devem registrar `NOT_VERIFIED`, liberar FDs/locks e continuar emitindo relatório bloqueado sem traceback. Se uma vier `NOT_VERIFIED`, há evidência incompleta e a causa deve ser analisada antes de merge.
 
 ## Gates
 
 - Escopo **quatro arquivos**: novo piloto, novos testes, este plano e `docs/README.md`, sem tocar nos guardas ou pilotos integrados.
 - Operador valida suítes e cenário sintético no HEAD exato no Arch, além de integridade Git.
+- A primeira auditoria Codex GPT-6 High identificou **dois P2**: import incondicional de `fcntl` e `Thread.start()`/`join()` quando a thread não inicia. Ambos foram corrigidos na branch, com **oito regressões novas**. É obrigatória nova validação no Arch e nova auditoria do **HEAD corrigido** antes do merge.
 - Auditoria independente Codex GPT-6 High, `--sandbox read-only`, com P1/P2 corrigidos e nova revisão se necessário. O Codex talvez não possa executar fixtures em sandbox somente leitura; não confundir com os testes do operador.
 - **Merge somente com consentimento explícito para este PR.** PR #9 Draft preservado e `STRONG` sempre indisponível.
