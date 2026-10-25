@@ -9,7 +9,7 @@ Antes de criar telas ou executar agentes, comprovar com dados fictícios as deci
 ## Escopo deste PR
 
 - `scripts/agent_batch_plan.py`: biblioteca pura `plan_batch(policy, assignments)`; CLI somente `--synthetic-only [--json]`. **Sem argumentos de workspace, arquivo real, agente ou token.**
-- `tests/test_agent_batch_plan.py`: **31 testes** sintéticos e negativos, incluindo conflitos com três tarefas, tags duplicadas, agentes repetidos, grants inválidos e orçamento de nuvem.
+- `tests/test_agent_batch_plan.py`: **33 testes** sintéticos e negativos, incluindo conflitos com três tarefas, tags duplicadas, agentes repetidos, grants inválidos e orçamento de nuvem.
 - Este plano e a entrada em `docs/README.md`.
 
 ### Contrato sintético do lote
@@ -22,7 +22,7 @@ Antes de criar telas ou executar agentes, comprovar com dados fictícios as deci
 - `agent_id`: identificador simbólico, sem relação com um agente realmente instalado. Duplicações no mesmo lote são recusadas.
 - `branch_tag`, `worktree_tag`: identificadores simbólicos únicos e obrigatórios **para declarações de escrita**; ambos são `null` em tarefas de leitura. Não são caminhos nem refs Git verificadas.
 
-A definição de `specialty` (frontend/backend/QA/segurança etc.) é apenas **taxonomia**, não cria, materializa ou convoca especialistas.
+A definição de `specialty` (frontend/backend/QA/segurança etc.) é apenas **taxonomia**, não cria, materializa ou convoca especialistas. Os domínios `database`, `devops`, `performance` e `management` são **somente leitura/proposta** nesta etapa; requisições de escrita são bloqueadas com `SPECIALTY_WRITE_REQUIRES_SEPARATE_PROCEDURE`.
 
 ### Resultados consultivos
 
@@ -66,6 +66,6 @@ git diff --check main...HEAD
 git status --short
 ```
 
-Esperado no código proposto: **31 testes novos**, **148 gerais** (117 previamente integrados + 31), **189 de isolamento** (suíte existente), sem alterações locais; ainda **não comprovado no Arch**. Executar apenas no repositório `agent-toolkit` com branch e HEAD corretos. Não executar em projetos reais.
+Esperado no código proposto: **33 testes novos**, **150 gerais** (117 previamente integrados + 33), **189 de isolamento** (suíte existente), sem alterações locais; ainda **não comprovado no Arch**. Executar apenas no repositório `agent-toolkit` com branch e HEAD corretos. Não executar em projetos reais.
 
 Gates antes de eventual merge: testes completos no Arch, revisão Codex read-only em HEAD fixo, correções de achados, revisão humana e **autorização específica para este PR**.
