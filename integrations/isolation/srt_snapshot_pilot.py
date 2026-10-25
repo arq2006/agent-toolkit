@@ -159,8 +159,14 @@ def host_snapshot_intact(fx, root):
         copied = os.stat(os.path.join(root, COPY_NAME), follow_symlinks=False)
         source = os.stat(fx.auth_canary, follow_symlinks=False)
         decoy = os.stat(fx.secret, follow_symlinks=False)
-        with open(os.path.join(root, COPY_NAME), "rb") as inp:
-            data = inp.read(G.MAX_READ + 1)
+        # Supervisor must not follow a symlink inserted by an unsafe worker.
+        # A plain open(root/sample.txt) here could itself disclose outside data.
+        root_fd = pathguard.open_root(root)
+        try:
+            data = G.read_bytes(root_fd, COPY_NAME)
+            names = sorted(os.listdir(root_fd))
+        finally:
+            os.close(root_fd)
         with open(fx.secret, "rb") as inp:
             secret = inp.read(256)
         return (
@@ -170,10 +176,10 @@ def host_snapshot_intact(fx, root):
             and data == fx.auth_marker.encode("utf-8")
             and secret == fx.secret_marker.encode("utf-8")
             and not os.path.lexists(os.path.join(root, "created.txt"))
-            and sorted(os.listdir(root)) == [COPY_NAME]
+            and names == [COPY_NAME]
             and stat.S_ISREG(decoy.st_mode) and decoy.st_nlink >= 2
         )
-    except OSError:
+    except (OSError, G.Openat2Denied, pathguard.PathGuardError):
         return False
 
 
