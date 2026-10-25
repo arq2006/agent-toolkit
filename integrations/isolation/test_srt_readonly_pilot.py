@@ -28,6 +28,7 @@ class SyntheticPilotTests(unittest.TestCase):
             self.assertEqual(oct(os.stat(root).st_mode & 0o777), "0o700")
             self.assertTrue(os.path.isfile(os.path.join(root, "readonly_executor.py")))
             self.assertTrue(os.path.isfile(os.path.join(root, "pathguard.py")))
+            self.assertTrue(P.existing_files_intact(root, fx.auth_marker))
             fd = pathguard.open_root(root)
             try:
                 self.assertEqual(pathguard.scan_tree(fd), [])
@@ -115,20 +116,22 @@ class SyntheticPilotTests(unittest.TestCase):
             "reject_write_request": {"ok": False, "code":"operation_denied"},
             "native_external_read": {"opened": False},
             "native_write_denied": True,
+            "native_existing_overwrite_denied": True,
+            "native_existing_truncate_denied": True,
         }
         hardlink = {
             "hardlink_denied": {"ok": False, "code": "unsafe_tree"},
             "normal_read_denied_with_hardlink": {"ok": False, "code": "unsafe_tree"},
             "native_hardlink": {"opened": True, "matched": True},
         }
-        self.assertTrue(all(c["status"] == "PASS" for c in P.classify(baseline, hardlink, "fictional")))
+        self.assertTrue(all(c["status"] == "PASS" for c in P.classify(baseline, hardlink, "fictional", host_intact=True)))
         for key in ("native_write_denied", "native_external_read"):
             broken = dict(baseline)
             broken[key] = False if key == "native_write_denied" else {"opened": True}
-            self.assertTrue(any(c["status"] == "FAIL" for c in P.classify(broken, hardlink, "fictional")))
+            self.assertTrue(any(c["status"] == "FAIL" for c in P.classify(broken, hardlink, "fictional", host_intact=True)))
         broken = dict(hardlink)
         broken["hardlink_denied"] = {"ok": True}
-        self.assertTrue(any(c["status"] == "FAIL" for c in P.classify(baseline, broken, "fictional")))
+        self.assertTrue(any(c["status"] == "FAIL" for c in P.classify(baseline, broken, "fictional", host_intact=True)))
 
     def test_malformed_canary_results_fail_closed(self):
         bads = (
@@ -153,14 +156,72 @@ class SyntheticPilotTests(unittest.TestCase):
             "reject_write_request": {"ok": False, "code": "operation_denied"},
             "native_external_read": {"opened": False},
             "native_write_denied": True,
+            "native_existing_overwrite_denied": True,
+            "native_existing_truncate_denied": True,
         }
         hardlink = {
             "hardlink_denied": {"ok": False, "code": "unsafe_tree"},
             "normal_read_denied_with_hardlink": {"ok": False, "code": "unsafe_tree"},
             "native_hardlink": {"opened": True, "matched": False},
         }
-        checks = {c["id"]: c["status"] for c in P.classify(baseline, hardlink, "x")}
+        checks = {c["id"]: c["status"] for c in P.classify(baseline, hardlink, "x", host_intact=True)}
         self.assertEqual(checks["native_hardlink_result_consistent"], "FAIL")
+
+    def test_recursion_error_from_worker_json_is_fail_closed(self):
+        # Mesmo se o JSON puder ser lido em bytes, um aninhamento excessivo
+        # precisa virar None/código 2, e não traceback/código 1.
+        with L.create_fixture() as fx:
+            root = P.stage_fixture(fx)
+            deep = ("[" * 1600 + "0" + "]" * 1600 + "\n").encode()
+            with mock.patch.object(L, "_spawn", return_value=(0, deep, b"", False)):
+                self.assertIsNone(P._worker(self.fake(), fx, root, "baseline", 5))
+            with mock.patch.object(P.json, "loads", side_effect=RecursionError("deep")):
+                with mock.patch.object(L, "_spawn", return_value=(0, b"{}", b"", False)):
+                    self.assertIsNone(P._worker(self.fake(), fx, root, "baseline", 5))
+
+    def test_supervisor_rejects_overwrite_and_truncation_of_existing_files(self):
+        for name, _suffix in P.EXISTING_WRITE_FILES:
+            with L.create_fixture() as fx:
+                root = P.stage_fixture(fx)
+                self.assertTrue(P.existing_files_intact(root, fx.auth_marker))
+                with open(os.path.join(root, name), "wb") as file:
+                    if "overwrite" in name:
+                        file.write(b"MODIFIED-BY-TEST")
+                    # No caso de truncamento, abertura em wb ja removeu bytes.
+                self.assertFalse(P.existing_files_intact(root, fx.auth_marker))
+
+    def test_new_file_denial_does_not_prove_existing_files_immutable(self):
+        baseline = {
+            "read_inside": {"ok": True, "response": {
+                "ok": True, "op": "read", "text": "fixture"}},
+            "list_inside": {"ok": True, "response": {"entries": [
+                "sample.txt", "pathguard.py", "readonly_executor.py"]}},
+            "reject_traversal": {"ok": False, "code": "invalid_path"},
+            "reject_absolute": {"ok": False, "code": "invalid_path"},
+            "reject_write_request": {"ok": False, "code": "operation_denied"},
+            "native_external_read": {"opened": False},
+            "native_write_denied": True,
+            "native_existing_overwrite_denied": True,
+            "native_existing_truncate_denied": True,
+        }
+        hardlink = {
+            "hardlink_denied": {"ok": False, "code": "unsafe_tree"},
+            "normal_read_denied_with_hardlink": {"ok": False, "code": "unsafe_tree"},
+            "native_hardlink": {"opened": True, "matched": True},
+        }
+        def statuses(baseline_value, host_intact=True):
+            return {c["id"]: c["status"] for c in P.classify(
+                baseline_value, hardlink, "fixture", host_intact=host_intact)}
+        self.assertTrue(all(x == "PASS" for x in statuses(baseline).values()))
+        for key, failed_id in (
+            ("native_existing_overwrite_denied", "native_existing_overwrite_blocked"),
+            ("native_existing_truncate_denied", "native_existing_truncate_blocked"),
+        ):
+            bypass = dict(baseline)
+            bypass[key] = False
+            self.assertEqual(statuses(bypass)[failed_id], "FAIL")
+        self.assertEqual(statuses(baseline, host_intact=False)[
+            "host_existing_files_intact"], "FAIL")
 
     def test_fake_srt_without_isolation_must_fail(self):
         # Fake valida JSON mas executa o processo diretamente. NUNCA PASS.
@@ -172,6 +233,9 @@ class SyntheticPilotTests(unittest.TestCase):
         checks = {c["id"]: c["status"] for c in result["checks"]}
         self.assertEqual(checks.get("authorized_read"), "PASS")
         self.assertEqual(checks.get("native_write_blocked"), "FAIL")
+        self.assertEqual(checks.get("native_existing_overwrite_blocked"), "FAIL")
+        self.assertEqual(checks.get("native_existing_truncate_blocked"), "FAIL")
+        self.assertEqual(checks.get("host_existing_files_intact"), "FAIL")
         self.assertEqual(checks.get("native_external_read_blocked"), "FAIL")
 
     def test_fake_srt_ignoring_policy_must_fail(self):
