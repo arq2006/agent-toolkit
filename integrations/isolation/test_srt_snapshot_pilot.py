@@ -119,8 +119,17 @@ class SnapshotPilotTests(unittest.TestCase):
     def test_host_detects_native_truncation(self):
         with L.create_fixture() as fx:
             root = self.stage(fx)
-            with open(os.path.join(root, "sample.txt"), "wb") as out:
-                out.truncate()
+            target = os.path.join(root, "sample.txt")
+            # O snapshot é 0400 por design. Apenas o supervisor da
+            # fixture fictícia simula uma alteração externa e restaura o
+            # modo de leitura, para testar a detecção da perda de conteúdo.
+            self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o400)
+            os.chmod(target, 0o600)
+            try:
+                with open(target, "r+b") as out:
+                    out.truncate(0)
+            finally:
+                os.chmod(target, 0o400)
             self.assertFalse(P.host_snapshot_intact(fx, root))
 
     def test_host_refuses_symlink_swapped_target_without_reading_decoy(self):
