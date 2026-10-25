@@ -185,6 +185,23 @@ class BatchTests(unittest.TestCase):
         result = plan.plan_batch(policy(), [a])
         self.assertEqual(result["assignments"][0]["route"], "BLOCKED")
 
+    def test_high_risk_specialties_do_not_receive_write_proposals(self):
+        for specialty in ("database", "devops", "performance", "management"):
+            a = write("A", "demo/src/a.py")
+            a["task"]["specialty"] = specialty
+            r = plan.plan_batch(policy(), [a])["assignments"][0]
+            self.assertEqual(r["route"], "BLOCKED")
+            self.assertIn("SPECIALTY_WRITE_REQUIRES_SEPARATE_PROCEDURE",
+                          r["reasons"])
+
+    def test_high_risk_specialties_can_plan_readonly_analysis(self):
+        for specialty in ("database", "devops", "performance", "management"):
+            a = read("A", "demo/docs/a.md")
+            a["task"]["specialty"] = specialty
+            r = plan.plan_batch(policy(), [a])["assignments"][0]
+            self.assertEqual(r["route"], "LOCAL_PLAN_ONLY")
+            self.assertFalse(r["real_reservation_created"])
+
     def test_local_unavailable_does_not_route_to_cloud(self):
         a = write("A", "demo/src/a.py")
         a["task"]["local_available"] = False
