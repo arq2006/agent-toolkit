@@ -114,10 +114,23 @@ def read_bytes(root_fd, rel, max_bytes=MAX_READ):
             raise Openat2Denied("unsafe_file")
         if st.st_size > max_bytes:
             raise Openat2Denied("too_large")
-        data = os.read(fd, max_bytes + 1)
-        if len(data) > max_bytes:
-            raise Openat2Denied("too_large")
-        return data
+        # Uma leitura regular pode retornar menos bytes que o solicitado sem
+        # ter chegado ao EOF. Não tratar short read como conteúdo completo.
+        # Ler no máximo max_bytes + 1 bytes para detectar crescimento do arquivo
+        # após fstat, sem materializar uma resposta ilimitada.
+        chunks = []
+        total = 0
+        while True:
+            remaining = max_bytes + 1 - total
+            if remaining <= 0:
+                raise Openat2Denied("too_large")
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                return b"".join(chunks)
+            total += len(chunk)
+            if total > max_bytes:
+                raise Openat2Denied("too_large")
+            chunks.append(chunk)
     except OSError:
         raise Openat2Denied("filesystem_error") from None
     finally:
