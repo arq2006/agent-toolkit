@@ -50,6 +50,9 @@ Divisão em seis PRs aprovada; agentes `planner`, `implementer`, `auditor`; Sonn
 
 **PR3 (GH-F1.8, 24/10/2026):** launcher SRT e `toolkit_doctor` em `integrations/isolation/`, com srt fixado em 0.0.81, rede só em deny e canários apenas em fixture sintético. STRONG permanece indisponível e operações com arquivos, BLOCKED; o resultado do doctor não autoriza execução de agentes. Detalhes e limites em `integrations/isolation/README.md`.
 
+## ADR-012 — Fronteiras de confiança para snapshot e supervisor
+**Status:** proposta documental (GH-F1.18, PR-A; 25/10/2026). Ver [adr/ADR-012-trusted-snapshot-boundaries.md](adr/ADR-012-trusted-snapshot-boundaries.md). Modelo de ameaças A1 (agentes sob controle do supervisor, fronteira principal), A2 (escritores honestos: observação, detecção e recusa), A3 (malicioso do mesmo UID: fora da garantia inicial) e A4 (root/kernel/hardware: fora do escopo). Arquitetura preferida e experimental: Proprietário → Supervisor → Captura controlada → Snapshot Store → Célula isolada → ChangeSet → Apply Gate; componentes posteriores são só propostas. `ctime`, `mtime`, inotify e releituras são evidências de detecção, não garantia contra ABA; atomicidade, reflink e fs-verity não são presumidos (ambiente informado pelo proprietário: ext4, kernel 7.2.4-arch1-2, sem capacidades comprovadas). `STRONG=UNAVAILABLE`, `readiness=BLOCKED` e todas as autorizações de agentes, arquivos, nuvem e dados seguem inalteradas; auditoria Codex pendente.
+
 ## Registro de auditoria independente
 Nas F0.1 e F0.2 **não houve auditoria independente do Codex** (indisponível no ambiente de nuvem). Houve apenas revisão própria do implementador e verificações automáticas (checksums, links, consistência) mais a revisão humana do PR.
 

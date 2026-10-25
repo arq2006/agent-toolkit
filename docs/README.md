@@ -14,6 +14,7 @@
 | [pesquisas/claude-code-materializacao-2026-10-22.md](pesquisas/claude-code-materializacao-2026-10-22.md) | Pesquisa da documentação do Claude Code (GH-F1.3) |
 | [adr/ADR-010-materializacao-em-claude-code.md](adr/ADR-010-materializacao-em-claude-code.md) | Proposta de materialização em `.claude/` |
 | [adr/ADR-011-isolamento-do-processo.md](adr/ADR-011-isolamento-do-processo.md) | Proposta de isolamento portátil do processo (GH-F1.8, provisório); não há STRONG demonstrado |
+| [adr/ADR-012-trusted-snapshot-boundaries.md](adr/ADR-012-trusted-snapshot-boundaries.md) | Proposta documental de fronteiras de confiança para snapshot e supervisor (GH-F1.18, PR-A); nada implementado, STRONG indisponível |
 | [plans/GH-F1-8-readonly-executor-boundary.md](plans/GH-F1-8-readonly-executor-boundary.md) | Prototipo da interface read-only com JSON estrito e pathguard, nao ligado aos agentes |
 | [plans/GH-F1-8-srt-readonly-synthetic-pilot.md](plans/GH-F1-8-srt-readonly-synthetic-pilot.md) | Piloto de integração sob SRT com fixture fictícia, sem Claude e sem autorização de execução de agentes |
 | [plans/GH-F1-9-openat2-kernel-path-boundary.md](plans/GH-F1-9-openat2-kernel-path-boundary.md) | Experimento Linux openat2 contra symlinks/mount traversal, com canário SRT sintético e sem agentes |
