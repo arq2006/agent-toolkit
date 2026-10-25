@@ -27,7 +27,8 @@ class SrtOpenat2ProbeTests(unittest.TestCase):
             P.stage_guard(root)
             self.assertTrue(root.startswith(fx.authorized + os.sep))
             self.assertTrue(os.path.isfile(os.path.join(root, P.GUARD_FILE)))
-            self.assertEqual(os.listdir(fx.external), ["secret.txt"])
+            self.assertEqual(sorted(os.listdir(fx.external)),
+                             ["secret.txt", "writable_target.txt"])
 
     def test_classification_requires_kernel_and_srt_controls(self):
         r = {
