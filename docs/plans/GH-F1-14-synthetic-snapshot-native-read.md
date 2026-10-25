@@ -50,7 +50,7 @@ git diff --check main...HEAD
 git status --short
 ```
 
-**Contagens esperadas, não verificadas no Arch**: 37 testes novos, 188 gerais inalterados, **256 de isolamento** (219 existentes +37). Alguns casos dependentes do kernel podem ser `SKIP` fora do Arch; `SKIP` não é evidência positiva.
+**Contagens esperadas no novo HEAD, ainda não verificadas no Arch**: 40 testes novos, 188 gerais inalterados, **259 de isolamento** (219 existentes +40). O HEAD anterior passou 37 testes novos e 256 de isolamento, mas isso não valida o código após a correção P2. Alguns casos dependentes do kernel podem ser `SKIP` fora do Arch; `SKIP` não é evidência positiva.
 
 Após o unit test, o operador pode optar por executar este piloto SRT sintético real:
 
@@ -66,5 +66,6 @@ Neste comando, **código 0 seria sucesso do ensaio específico**, sem autorizar 
 - Evidência dos testes no Arch, **resultado e lista dos 12 checks do piloto SRT**, integridade do Git e SHA revisada.
 - Auditoria Codex GPT-6 High com `--sandbox read-only`, no head exato, sem usar o ambiente read-only como prova da suíte que precisa de pasta temporária.
 - Correção de P1/P2, reteste e nova auditoria quando necessário.
+- **P2 da primeira auditoria Codex do PR #25:** comparação de dicionários aceitava `1 == True` em `native_snapshot_read`. Corrigido exigindo `opened is True`, `matched is True` e chaves exatas; três regressões adicionais cobrem inteiros/decimais, campos extras/ausentes e tipos inválidos. **Reteste Arch e reauditoria Codex obrigatórios no novo HEAD antes de merge.**
 - **Autorização humana exclusiva para este PR**, sem reutilizar permissão de PR anterior.
 - Nenhuma ativação de agente, orquestrador, UI ou mudança em `.claude/`, `agents/`, `integrations/isolation/toolkit_doctor.py`, `native_boundary_readiness.py`, SRT original ou GH-F1.10–12.
