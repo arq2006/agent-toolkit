@@ -226,7 +226,12 @@ def classify(result, host_intact, policy_verified, independent_copy):
     for key in sorted(REQUIRED_RESULTS):
         obj = result.get(key) if type(result) is dict else None
         if key == "native_snapshot_read":
-            valid = obj == {"opened": True, "matched": True}
+            # SRT output is untrusted JSON: 1 == True in Python, so
+            # dict equality alone would accept numeric forgeries.
+            valid = (type(obj) is dict
+                     and set(obj) == {"opened", "matched"}
+                     and obj["opened"] is True
+                     and obj["matched"] is True)
         else:
             valid = obj is True
         check(key, valid)
