@@ -17,7 +17,7 @@ Essa é **detecção parcial e não garantia de imutabilidade**. Uma alteração
 `integrations/isolation/srt_snapshot_race_probe.py` tem CLI **somente `--synthetic-only [--json]`**. Para cada caso:
 
 - Cria uma fixture nova por `srt_launcher.create_fixture()`; nunca recebe um caminho arbitrário.
-- Uma **thread separada** faz uma única alteração de arquivo fictício na fase exata de leitura/escrita, coordenada por dois `threading.Event` (`fire` e `finished`) e timeout. O worker de ataque deve realmente disparar e concluir; se não, o teste falha.
+- Uma **thread separada** faz uma única alteração de arquivo fictício na fase exata de leitura/escrita, coordenada por três `threading.Event` (`fire`, `finished` e `cancel`) e timeout. O worker de ataque deve realmente disparar e concluir; se não, o teste falha.
 - Os pontos de injeção são somente substituições temporárias de `G.read_bytes` e `_write_all` por wrappers de teste usando `unittest.mock`, restritas ao processo do canário. O código de produção de `srt_snapshot_pilot` não ganha callbacks ou comandos externos.
 - **Não inicia SRT, subprocessos, shell, redes, mount, namespaces, agentes ou Codex**. O SRT real já foi ensaiado separadamente na GH-F1.14; este experimento visa apenas concorrência no estágio local.
 
