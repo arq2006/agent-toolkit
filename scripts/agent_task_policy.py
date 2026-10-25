@@ -106,8 +106,12 @@ def validate_policy(policy):
     if policy["version"] != 2 or type(policy["version"]) is not int:
         raise PolicyDenied("unsupported_policy")
     _name(policy["workspace_id"])
-    editable = _entries(policy["editable"], nonempty=True)
+    editable = _entries(policy["editable"])
     readonly = _entries(policy["read_only"])
+    # Read-only workspaces are valid for planner/auditor. An empty combined
+    # grant set still cannot produce any scope, even if protected is nonempty.
+    if not editable and not readonly:
+        raise PolicyDenied("empty_grants")
     protected = _entries(policy["protected"])
     for cap in ("cloud_task_cap_cents", "cloud_day_cap_cents", "cloud_project_cap_cents"):
         _money(policy[cap])
