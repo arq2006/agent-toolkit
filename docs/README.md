@@ -21,6 +21,7 @@
 | [plans/GH-F1-11-offline-task-batch-preview.md](plans/GH-F1-11-offline-task-batch-preview.md) | Pré-coordenação de lotes fictícios, conflitos de arquivos e tags de worktree/branch; nenhuma execução de agentes |
 | [plans/GH-F1-12-delegation-catalog-preview.md](plans/GH-F1-12-delegation-catalog-preview.md) | Catálogo simbólico dos 12 domínios e contratos de delegação hierárquica sem instalação ou execução de agentes |
 | [plans/GH-F1-13-native-boundary-readiness.md](plans/GH-F1-13-native-boundary-readiness.md) | Gate de diagnóstico de hardlink nativo, bind mounts e concorrência: STRONG indisponível e agentes bloqueados |
+| [plans/GH-F1-14-synthetic-snapshot-native-read.md](plans/GH-F1-14-synthetic-snapshot-native-read.md) | Piloto de snapshot sintético por cópia de inode novo e canário SRT de leitura nativa; ainda sem agentes |
 | [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md) | Estudo da futura GH-F1.7 (orquestrador e 12 especialistas), não aprovada |
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
