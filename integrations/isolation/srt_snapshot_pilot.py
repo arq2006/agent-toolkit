@@ -113,11 +113,17 @@ def stage_snapshot(fx):
         before = os.stat(fx.auth_canary, follow_symlinks=False)
         data = G.read_bytes(source_fd, "canary_read.txt")
         after = os.stat(fx.auth_canary, follow_symlinks=False)
+        # GH-F1.15: catch a same-size, same-inode edit that occurs after
+        # the first read. Stat tuple equality alone cannot detect it.
+        rechecked = G.read_bytes(source_fd, "canary_read.txt")
+        final = os.stat(fx.auth_canary, follow_symlinks=False)
+        identity = lambda st: (st.st_dev, st.st_ino, st.st_size)
         if (not data or data != fx.auth_marker.encode("utf-8")
-                or not stat.S_ISREG(before.st_mode)
-                or before.st_nlink != 1 or after.st_nlink != 1
-                or (before.st_dev, before.st_ino, before.st_size)
-                != (after.st_dev, after.st_ino, after.st_size)):
+                or rechecked != data
+                or not all(stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+                           for st in (before, after, final))
+                or identity(before) != identity(after)
+                or identity(before) != identity(final)):
             raise SnapshotRefused("source_not_stable")
     finally:
         os.close(source_fd)
