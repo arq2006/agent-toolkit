@@ -16,6 +16,7 @@ import srt_launcher as L
 import srt_readonly_pilot as R
 
 MAX_OUTPUT = 8192
+MAX_STAGED_MODULE_BYTES = 128 * 1024
 GUARD_FILE = "linux_openat2_guard.py"
 
 WORKER_SRC = r'''
@@ -72,11 +73,28 @@ def stage_guard(root):
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
         try:
             meta = os.fstat(fd)
-            if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > 128 * 1024:
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
+                    or not 0 <= meta.st_size <= MAX_STAGED_MODULE_BYTES):
                 raise ProbeRefused("module_rejected")
-            data = os.read(fd, 128 * 1024 + 1)
-            if len(data) > 128 * 1024:
-                raise ProbeRefused("module_too_large")
+            # Um read curto não significa EOF. Nunca copiar só o prefixo do módulo.
+            chunks = []
+            total = 0
+            while True:
+                remaining = MAX_STAGED_MODULE_BYTES + 1 - total
+                if remaining <= 0:
+                    raise ProbeRefused("module_too_large")
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_STAGED_MODULE_BYTES:
+                    raise ProbeRefused("module_too_large")
+                chunks.append(chunk)
+            # Recusa um arquivo truncado/alterado durante a cópia: não é um
+            # snapshot atômico, mas evita importar um módulo incompleto.
+            if total != meta.st_size:
+                raise ProbeRefused("module_changed")
+            data = b"".join(chunks)
         finally:
             os.close(fd)
         dst = os.open(os.path.join(root, GUARD_FILE), os.O_WRONLY | os.O_CREAT
