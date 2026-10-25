@@ -41,7 +41,10 @@ Testes (diretórios temporários fictícios): `python3 -I -m unittest discover -
   A política mantém `denyRead=["/"]`, libera leitura apenas do fixture e do
   runtime estritamente validado, exige `allowWrite=[]` e rede deny. Testa
   leitura/listagem positiva, recusas por caminhos inválidos, leitura nativa
-  externa, escrita nativa e hardlink fictício. O status `STRONG` permanece
+  externa, criação nativa, sobrescrita e truncamento de arquivos fictícios
+  existentes (com conferência de conteúdo pelo supervisor), além de hardlink
+  fictício. O JSON do resultado é tratado como não confiável, inclusive
+  aninhamento excessivo. O status `STRONG` permanece
   `UNAVAILABLE`, `agent_execution_authorized=false` mesmo se passar.
   **Não** usa Claude, MCP ou workspaces reais. Os testes com SRT falso
   precisam reprovar, não provar isolamento. Detalhes:
