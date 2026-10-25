@@ -16,14 +16,14 @@ Antes da interface visual, consolidar contratos determinísticos de admissão pa
 ## Entrega deste PR
 
 - `scripts/agent_task_policy.py`: função pura `evaluate(policy, request)`, sem leitura de arquivos, rede, subprocesso ou modelos. Os campos de autorização da resposta são sempre `false`. CLI aceita apenas `--synthetic-only [--json]`, produzindo um exemplo inventado.
-- `tests/test_agent_task_policy.py`: **36 testes** com políticas fictícias, regras de arquivo/diretório, diretórios não verificáveis, privilégios de caminho, ancestrais protegidos, credenciais `.env` em subpastas, papéis somente-leitura, orçamento, proibição de fallback automático para nuvem e campos de autorização forjados.
+- `tests/test_agent_task_policy.py`: **41 testes** com políticas fictícias, regras de arquivo/diretório, diretórios não verificáveis, permissões somente-leitura **sem nenhum grant editável**, rejeição de escopos inteiramente vazios, privilégios de caminho, ancestrais protegidos, credenciais `.env`, orçamento, proibição de fallback automático para nuvem e campos de autorização forjados.
 - Plano técnico e link no índice de documentação.
 
 ### Contrato consultivo
 
 **Policy** (objeto com chaves exatas):
 
-`version=2`, `workspace_id` (identificador simbólico, **não caminho real**), listas `editable`, `read_only`, `protected` de objetos **tipados** `{ "path": "caminho/relativo", "kind": "file" | "directory" }`, e valores de demonstração em centavos de dólar: `cloud_task_cap_cents`, `cloud_day_cap_cents`, `cloud_project_cap_cents`.
+`version=2`, `workspace_id` (identificador simbólico, **não caminho real**), listas `editable`, `read_only`, `protected` de objetos **tipados** `{ "path": "caminho/relativo", "kind": "file" | "directory" }`, e valores de demonstração em centavos de dólar. **Regra de grants:** `editable=[]` é permitido somente se `read_only` não estiver vazio; `editable=[]` e `read_only=[]` simultaneamente são recusados, independentemente de `protected`. `cloud_task_cap_cents`, `cloud_day_cap_cents`, `cloud_project_cap_cents`.
 
 **Request** (objeto com chaves exatas):
 
@@ -74,6 +74,6 @@ python3 -I -m unittest discover -s integrations/isolation -p 'test_*.py'
 git diff --check main...HEAD
 ```
 
-**Evidência por HEAD:** no HEAD anterior `b8618aa`, o operador aprovou 28/28 testes específicos, 104/104 testes gerais e 189/189 testes de isolamento no Arch. A **primeira auditoria Codex GPT-6 High** desse HEAD achou **2 P2**: (1) proposta para diretório que pode esconder segredos e (2) grant de arquivo tratado como diretório. A correção atual altera o contrato textual para `version=2`, adiciona campos `kind` e **8 testes de regressão** (36 específicos no total). **Nenhum teste novo ou segunda auditoria foi comprovado ainda para este HEAD.** A CLI permanece exclusivamente sintética e com todas as autorizações `false`.
+**Evidência por HEAD:** no HEAD anterior `b8618aa`, o operador aprovou 28/28 testes específicos, 104/104 testes gerais e 189/189 testes de isolamento no Arch. A **primeira auditoria Codex GPT-6 High** desse HEAD achou **2 P2**: (1) proposta para diretório que pode esconder segredos e (2) grant de arquivo tratado como diretório. A primeira correção alterou o contrato textual para `version=2`, adicionou campos `kind` e **8 testes de regressão** (36 específicos). O operador comprovou em Arch **36/36**, suíte geral **112/112** e isolamento **189/189**. A **segunda auditoria Codex GPT-6 High** daquele HEAD encontrou **1 P2 adicional**: a política recusava workspaces com somente `read_only` e `editable=[]`, impedindo o piloto consultivo de `planner` e `auditor`. Esta nova correção permite escopo exclusivamente de leitura, **mantém a rejeição de grants inteiramente vazios** e adiciona **5 regressões** (41 testes específicos, 117 gerais esperados). **Testes locais e terceira auditoria ainda pendentes para o novo HEAD.** A CLI permanece exclusivamente sintética e com todas as autorizações `false`.
 
 Antes de eventual merge: testes locais completos, auditoria Codex read-only com revisão dos achados, revisão humana e **nova autorização explícita** para aquele PR.
