@@ -20,6 +20,9 @@ import srt_launcher as L
 MAX_SOURCE_BYTES = 128 * 1024
 MAX_PILOT_OUTPUT = 8192
 SOURCE_FILES = ("pathguard.py", "readonly_executor.py")
+# Ambas as provas de escrita usam arquivos preexistentes, nunca dados do usuário.
+EXISTING_WRITE_FILES = (("existing-overwrite.txt", "-OVERWRITE"),
+                        ("existing-truncate.txt", "-TRUNCATE"))
 
 # Código CONSTANTE: sem código, comando, argv executável ou prompt vindo do usuário.
 # As únicas variáveis no argumento são caminhos e marcadores criados na fixture.
@@ -48,6 +51,18 @@ def native_read(path, marker):
     except (OSError, UnicodeError):
         return {"opened": False, "matched": False}
 
+def existing_write_denied(path, mode):
+    # Em fixtures fictícias: r+b testa sobrescrita; wb testa truncamento na abertura.
+    # Se open ou write falhar, o supervisor ainda confirma os bytes intactos.
+    try:
+        with open(path, mode) as out:
+            if mode == "r+b":
+                out.write(b"ALTERED-FICTITIOUS")
+            out.flush()
+        return False
+    except OSError:
+        return True
+
 try:
     if payload["suite"] == "baseline":
         request("read_inside", {"op":"read", "path":"sample.txt"})
@@ -63,6 +78,10 @@ try:
         else:
             os.close(fdwrite)
             results["native_write_denied"] = False
+        results["native_existing_overwrite_denied"] = existing_write_denied(
+            "existing-overwrite.txt", "r+b")
+        results["native_existing_truncate_denied"] = existing_write_denied(
+            "existing-truncate.txt", "wb")
     else:
         request("hardlink_denied", {"op":"read", "path":"hardlink.txt"})
         request("normal_read_denied_with_hardlink", {"op":"read", "path":"sample.txt"})
@@ -105,6 +124,11 @@ def stage_fixture(fx):
     fd = os.open(sample, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write(fx.auth_marker)
+    for name, suffix in EXISTING_WRITE_FILES:
+        fd = os.open(os.path.join(root, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                     | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(fx.auth_marker + suffix)
     # Prova que o host consegue abrir a pasta raiz via pathguard antes de passar a SRT.
     fd = pathguard.open_root(root)
     try:
@@ -113,6 +137,25 @@ def stage_fixture(fx):
     finally:
         os.close(fd)
     return root
+
+
+def existing_files_intact(root, marker):
+    """O processo supervisor confere o conteúdo original das fixtures após os probes.
+
+    Não confia exclusivamente no status informado pelo subprocesso: mesmo que
+    open('wb') truncasse antes de lançar erro, a verificação externa reprova.
+    """
+    fd = pathguard.open_root(root)
+    try:
+        for name, suffix in EXISTING_WRITE_FILES:
+            expected = (marker + suffix).encode("utf-8")
+            if pathguard.read_bytes(fd, name, max_bytes=256) != expected:
+                return False
+        return True
+    except pathguard.PathGuardError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def build_readonly_settings(root, reads):
@@ -154,7 +197,8 @@ def _worker(deps, fx, root, suite, timeout):
     for line in reversed(out.decode("utf-8", "replace").splitlines()):
         try:
             parsed = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # Saída do SRT é não confiável; JSON aninhado demais deve ser descartado.
             continue
         if (type(parsed) is dict and parsed.get("nonce") == nonce
                 and parsed.get("suite") == suite and type(parsed.get("results")) is dict):
@@ -168,7 +212,7 @@ def _item(results, name):
     return value if type(value) is dict else {}
 
 
-def classify(baseline, hardlink, marker):
+def classify(baseline, hardlink, marker, host_intact=False):
     """PASS exige controles positivos e negativos concretos na mesma execução real."""
     checks = []
     def check(name, ok):
@@ -194,6 +238,11 @@ def classify(baseline, hardlink, marker):
     native = _item(baseline, "native_external_read")
     check("native_external_read_blocked", native.get("opened") is False)
     check("native_write_blocked", baseline.get("native_write_denied") is True)
+    check("native_existing_overwrite_blocked",
+          baseline.get("native_existing_overwrite_denied") is True)
+    check("native_existing_truncate_blocked",
+          baseline.get("native_existing_truncate_denied") is True)
+    check("host_existing_files_intact", host_intact is True)
     if hardlink is None:
         check("hardlink_suite_executed", False)
         return checks
@@ -230,6 +279,9 @@ def run_synthetic(deps=None, timeout=L.DEFAULT_TIMEOUT):
                 if json.load(inp) != policy:
                     raise SyntheticPilotError("política gravada difere da validada")
             baseline = _worker(deps, fx, root, "baseline", timeout)
+            # O supervisor lê os dois arquivos existentes após as tentativas.
+            # Sem conteúdo preservado, nenhum relatório pode passar.
+            host_intact = existing_files_intact(root, fx.auth_marker)
             if baseline is not None and _item(baseline, "read_inside").get("ok") is True:
                 # Só um hardlink novo da fixture fictícia, fora de quaisquer projetos reais.
                 try:
@@ -247,7 +299,7 @@ def run_synthetic(deps=None, timeout=L.DEFAULT_TIMEOUT):
                             else "UNEXPECTED")
             else:
                 hardlink = None
-            rep["checks"] = classify(baseline, hardlink, fx.auth_marker)
+            rep["checks"] = classify(baseline, hardlink, fx.auth_marker, host_intact)
     except (SyntheticPilotError, L.LauncherError, pathguard.PathGuardError, OSError, ValueError) as e:
         rep["checks"].append({"id": "execution", "status": "FAIL", "reason": type(e).__name__})
     rep["exit_code"] = 0 if rep["checks"] and all(
