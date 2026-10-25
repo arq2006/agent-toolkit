@@ -102,7 +102,8 @@ class CooperativeFreezeTests(unittest.TestCase):
 
     def test_lock_symlink_does_not_change_fictional_decoy(self):
         with L.create_fixture() as fx:
-            before = open(fx.secret, "rb").read()
+            with open(fx.secret, "rb") as inp:
+                before = inp.read()
             os.symlink(fx.secret, os.path.join(fx.root, F.LOCK_NAME))
             with self.assertRaises(F.FreezeRefused):
                 F._new_lock_fd(fx)
