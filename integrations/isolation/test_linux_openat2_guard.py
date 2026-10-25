@@ -50,6 +50,63 @@ class Openat2GuardTests(unittest.TestCase):
         self.assertEqual(G.read_text(self.fd, "inside.txt"), "FICTIONAL-OK")
         self.assertEqual(G.read_text(self.fd, "sub/nested.txt"), "NESTED")
 
+    def test_short_regular_file_reads_continue_until_eof(self):
+        self.require_kernel()
+        real_read = os.read
+        read_calls = []
+
+        def short_read(fd, requested):
+            read_calls.append(requested)
+            return real_read(fd, min(requested, 2))
+
+        with mock.patch.object(G.os, "read", side_effect=short_read):
+            result = G.read_bytes(self.fd, "inside.txt")
+        self.assertEqual(result, b"FICTIONAL-OK")
+        # A função precisa de múltiplas leituras e mais uma para detectar EOF.
+        self.assertGreater(len(read_calls), 2)
+
+    def test_short_reads_preserve_utf8_and_exact_byte_limit(self):
+        self.require_kernel()
+        encoded = "ação".encode("utf-8")
+        with open(os.path.join(self.root, "unicode.txt"), "wb") as out:
+            out.write(encoded)
+        real_read = os.read
+
+        def one_byte(fd, requested):
+            return real_read(fd, min(requested, 1))
+
+        with mock.patch.object(G.os, "read", side_effect=one_byte):
+            self.assertEqual(G.read_text(self.fd, "unicode.txt", max_bytes=len(encoded)),
+                             "ação")
+        with open(os.path.join(self.root, "empty.txt"), "wb"):
+            pass
+        self.assertEqual(G.read_bytes(self.fd, "empty.txt", max_bytes=1), b"")
+
+    def test_growth_after_stat_is_denied_even_with_partial_reads(self):
+        self.require_kernel()
+        # O arquivo verdadeiro possui 12 bytes, mas o fluxo simulado cresceu
+        # para 65 bytes após fstat (limite 64). Nunca retornar um prefixo.
+        data = iter((b"A" * 32, b"B" * 32, b"C"))
+        requested = []
+
+        def growing_read(_fd, size):
+            requested.append(size)
+            return next(data)
+
+        with mock.patch.object(G.os, "read", side_effect=growing_read):
+            with self.assertRaises(G.Openat2Denied) as denied:
+                G.read_bytes(self.fd, "inside.txt", max_bytes=64)
+        self.assertEqual(str(denied.exception), "too_large")
+        self.assertEqual(requested, [65, 33, 1])
+
+    def test_error_during_partial_read_fails_closed(self):
+        self.require_kernel()
+        with mock.patch.object(G.os, "read",
+                               side_effect=[b"PARTIAL", OSError(errno.EIO, "fixture")]):
+            with self.assertRaises(G.Openat2Denied) as denied:
+                G.read_bytes(self.fd, "inside.txt")
+        self.assertEqual(str(denied.exception), "filesystem_error")
+
     def test_kernel_positive_list_root_and_nested(self):
         self.require_kernel()
         self.assertEqual(G.list_dir(self.fd), ["inside.txt", "sub"])
