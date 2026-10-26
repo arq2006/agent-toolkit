@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""Protótipo GH-F1.18/PR-B: identidade de uma raiz SINTÉTICA pelo kernel.
+
+Abre um diretório sintético com openat2 (BENEATH, NO_SYMLINKS, NO_MAGICLINKS,
+NO_XDEV) a partir de um FD âncora e observa a identidade do FD aberto com
+fstat + statx(AT_EMPTY_PATH). Qualquer requisito mínimo não comprovado resulta
+em recusa (RootRefused); nunca em sucesso implícito.
+
+NÃO é autorização: identidade de raiz não equivale a concessão do proprietário,
+autenticação, proteção contra ABA ou exclusão de escritores externos. Não
+aceita caminho de projeto real: somente diretórios criados por
+make_synthetic_fixture(). STRONG=UNAVAILABLE e readiness=BLOCKED permanecem.
+"""
+import ctypes
+import dataclasses
+import errno
+import os
+import platform
+import shutil
+import stat
+import sys
+import tempfile
+
+SYNTHETIC_PREFIX = "gh-f1-18-synthetic-"
+MARKER_NAME = ".gh-f1-18-synthetic"
+MARKER_CONTENT = b"SYNTHETIC-ROOT-GH-F1-18\n"
+
+# Invariantes herdadas; nenhum resultado deste módulo as altera.
+INVARIANTS = {
+    "strong": "UNAVAILABLE",
+    "readiness": "BLOCKED",
+    "agent_execution_authorized": False,
+    "file_operations_authorized": False,
+    "cloud_call_authorized": False,
+    "data_transfer_authorized": False,
+}
+
+# UAPI Linux: x86_64 e arm64/aarch64; outras arquiteturas recusadas.
+_NR_OPENAT2 = 437
+_NR_STATX = {"x86_64": 332, "amd64": 332, "aarch64": 291, "arm64": 291}
+_RESOLVE_NO_XDEV = 0x01
+_RESOLVE_NO_MAGICLINKS = 0x02
+_RESOLVE_NO_SYMLINKS = 0x04
+_RESOLVE_BENEATH = 0x08
+_RESOLVE_ALL = (_RESOLVE_NO_XDEV | _RESOLVE_NO_MAGICLINKS |
+                _RESOLVE_NO_SYMLINKS | _RESOLVE_BENEATH)
+
+_AT_EMPTY_PATH = 0x1000
+STATX_TYPE = 0x1
+STATX_INO = 0x100
+STATX_MNT_ID = 0x1000
+STATX_MNT_ID_UNIQUE = 0x4000
+_REQUIRED_MASK = STATX_TYPE | STATX_INO  # não existe STATX_DEV
+_STATX_SIZE = 256
+
+
+class RootRefused(ValueError):
+    """Recusa estável; str(e) é o código, sem caminhos do usuário."""
+
+    @property
+    def code(self):
+        return str(self)
+
+
+class _OpenHow(ctypes.Structure):
+    _fields_ = [("flags", ctypes.c_uint64),
+                ("mode", ctypes.c_uint64),
+                ("resolve", ctypes.c_uint64)]
+
+
+class _Statx(ctypes.Structure):
+    _fields_ = [("stx_mask", ctypes.c_uint32),
+                ("stx_blksize", ctypes.c_uint32),
+                ("stx_attributes", ctypes.c_uint64),
+                ("stx_nlink", ctypes.c_uint32),
+                ("stx_uid", ctypes.c_uint32),
+                ("stx_gid", ctypes.c_uint32),
+                ("stx_mode", ctypes.c_uint16),
+                ("_pad0", ctypes.c_uint16),
+                ("stx_ino", ctypes.c_uint64),
+                ("stx_size", ctypes.c_uint64),
+                ("stx_blocks", ctypes.c_uint64),
+                ("stx_attributes_mask", ctypes.c_uint64),
+                ("_timestamps", ctypes.c_uint8 * 64),  # atime, btime, ctime, mtime
+                ("stx_rdev_major", ctypes.c_uint32),
+                ("stx_rdev_minor", ctypes.c_uint32),
+                ("stx_dev_major", ctypes.c_uint32),
+                ("stx_dev_minor", ctypes.c_uint32),
+                ("stx_mnt_id", ctypes.c_uint64),
+                ("_rest", ctypes.c_uint8 * 104)]
+
+
+assert ctypes.sizeof(_Statx) == _STATX_SIZE
+
+
+@dataclasses.dataclass(frozen=True)
+class RootIdentity:
+    """Metadados observados. Só servem para COMPARAR com outra observação."""
+    dev: int
+    ino: int
+    mnt_id: int
+    mnt_id_variant: str  # "unique" | "legacy"; valores de variantes não se comparam
+    mnt_ns: object       # link de /proc/self/ns/mnt (contexto) ou None
+    statx_mask: int
+
+
+def _require_platform():
+    if sys.platform != "linux" or platform.machine().lower() not in _NR_STATX:
+        raise RootRefused("unsupported_platform")
+
+
+def _libc_syscall():
+    try:
+        call = ctypes.CDLL(None, use_errno=True).syscall
+    except (AttributeError, OSError):
+        raise RootRefused("syscall_unavailable") from None
+    call.restype = ctypes.c_long
+    return call
+
+
+def _sys_openat2(dirfd, name, flags):
+    """Chamada direta ao kernel; devolve fd ou levanta OSError com errno."""
+    how = _OpenHow(int(flags), 0, _RESOLVE_ALL)
+    call = _libc_syscall()
+    result = call(ctypes.c_long(_NR_OPENAT2), ctypes.c_int(dirfd),
+                  ctypes.c_char_p(name), ctypes.byref(how),
+                  ctypes.c_size_t(ctypes.sizeof(how)))
+    if result < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+    return int(result)
+
+
+def _sys_statx(fd, mask):
+    """statx(fd, "", AT_EMPTY_PATH, mask); devolve a estrutura ou OSError."""
+    stx = _Statx()
+    call = _libc_syscall()
+    result = call(ctypes.c_long(_NR_STATX[platform.machine().lower()]),
+                  ctypes.c_int(fd), ctypes.c_char_p(b""),
+                  ctypes.c_int(_AT_EMPTY_PATH), ctypes.c_uint(mask),
+                  ctypes.byref(stx))
+    if result < 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+    return stx
+
+
+_OPEN_ERRORS = {
+    errno.EXDEV: "xdev_refused",
+    errno.ELOOP: "symlink_refused",
+    errno.ENOENT: "root_missing",
+    errno.ENOTDIR: "not_directory",
+    errno.EBADF: "invalid_anchor",
+    errno.EACCES: "access_denied",
+    errno.ENOSYS: "syscall_unavailable",
+    errno.EPERM: "syscall_unavailable",
+    errno.EINVAL: "syscall_unavailable",
+}
+
+
+def _check_name(name):
+    if type(name) is not str or name in ("", ".", ".."):
+        raise RootRefused("invalid_name")
+    if "/" in name or "\x00" in name:
+        raise RootRefused("invalid_name")
+    try:
+        return name.encode("utf-8", "strict")
+    except UnicodeError:
+        raise RootRefused("invalid_name") from None
+
+
+def _check_anchor(anchor_fd):
+    if type(anchor_fd) is not int or anchor_fd < 0:
+        raise RootRefused("invalid_anchor")
+    try:
+        if not stat.S_ISDIR(os.fstat(anchor_fd).st_mode):
+            raise RootRefused("invalid_anchor")
+    except OSError:
+        raise RootRefused("invalid_anchor") from None
+
+
+def _open_dir(anchor_fd, name):
+    """Abre `name` (componente único) sob anchor_fd; recusa symlink e mount.
+
+    NO_XDEV é política de recusa: um mountpoint legítimo também resulta em
+    xdev_refused e não é relaxado.
+    """
+    _require_platform()
+    _check_anchor(anchor_fd)
+    encoded = _check_name(name)
+    try:
+        return _sys_openat2(anchor_fd, encoded,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as e:
+        raise RootRefused(_OPEN_ERRORS.get(e.errno, "open_failed")) from None
+
+
+def _fstat(fd):
+    try:
+        return os.fstat(fd)
+    except OSError:
+        raise RootRefused("invalid_fd") from None
+
+
+def _mnt_ns():
+    try:
+        return os.readlink("/proc/self/ns/mnt")
+    except OSError:
+        return None
+
+
+def _statx_or_refuse(fd, mask):
+    try:
+        return _sys_statx(fd, mask)
+    except OSError as e:
+        if e.errno == errno.EBADF:
+            raise RootRefused("invalid_fd") from None
+        raise RootRefused("syscall_unavailable") from None
+
+
+def observe(fd):
+    """fstat -> statx -> fstat sobre o FD já aberto; recusa se incompleto.
+
+    Os campos de um statx e as três chamadas NÃO são atômicos: a verificação
+    detecta apenas divergência visível, não elimina corridas.
+    """
+    _require_platform()
+    if type(fd) is not int or fd < 0:
+        raise RootRefused("invalid_fd")
+    pre = _fstat(fd)
+    if not stat.S_ISDIR(pre.st_mode):
+        raise RootRefused("not_directory")
+    stx = _statx_or_refuse(fd, STATX_TYPE | STATX_INO | STATX_MNT_ID_UNIQUE)
+    variant = None
+    if stx.stx_mask & STATX_MNT_ID_UNIQUE:
+        variant = "unique"
+    else:
+        stx = _statx_or_refuse(fd, STATX_TYPE | STATX_INO | STATX_MNT_ID)
+        if stx.stx_mask & STATX_MNT_ID:
+            variant = "legacy"
+    if (stx.stx_mask & _REQUIRED_MASK) != _REQUIRED_MASK:
+        raise RootRefused("identity_incomplete")
+    if variant is None:
+        raise RootRefused("identity_incomplete")  # sem identificador de montagem
+    if not stat.S_ISDIR(stx.stx_mode):
+        raise RootRefused("not_directory")
+    post = _fstat(fd)
+    if (pre.st_dev, pre.st_ino) != (post.st_dev, post.st_ino):
+        raise RootRefused("unstable_observation")
+    if stx.stx_ino != pre.st_ino:
+        raise RootRefused("ino_mismatch")
+    # Sem bit de máscara para dev: compara com fstat e recusa se divergir.
+    if os.makedev(stx.stx_dev_major, stx.stx_dev_minor) != pre.st_dev:
+        raise RootRefused("dev_mismatch")
+    return RootIdentity(dev=int(pre.st_dev), ino=int(pre.st_ino),
+                        mnt_id=int(stx.stx_mnt_id), mnt_id_variant=variant,
+                        mnt_ns=_mnt_ns(), statx_mask=int(stx.stx_mask))
+
+
+def compare(recorded, current):
+    """Igualdade de metadados; divergência ou não-comparabilidade recusa."""
+    if not isinstance(recorded, RootIdentity) or not isinstance(current, RootIdentity):
+        raise RootRefused("invalid_identity")
+    if recorded.mnt_id_variant != current.mnt_id_variant:
+        raise RootRefused("variant_not_comparable")
+    if recorded.mnt_ns is None or current.mnt_ns is None:
+        raise RootRefused("mount_namespace_unknown")
+    if recorded.mnt_ns != current.mnt_ns:
+        raise RootRefused("mount_namespace_changed")
+    if (recorded.dev, recorded.ino, recorded.mnt_id) != \
+            (current.dev, current.ino, current.mnt_id):
+        raise RootRefused("identity_diverged")
+
+
+class OpenedRoot:
+    """FD de raiz sintética + identidade observada. Não é uma concessão."""
+
+    def __init__(self, fd, identity):
+        self.fd = fd
+        self.identity = identity
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            finally:
+                self.fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def revalidate_fd(self):
+        """Reobserva o FD. Um FD obsoleto (pasta renomeada) AINDA passa aqui:
+        só reopen_and_compare() enxerga o nome atual. Diretório removido recusa."""
+        if self.fd is None:
+            raise RootRefused("invalid_fd")
+        if _fstat(self.fd).st_nlink == 0:
+            raise RootRefused("root_unlinked")
+        compare(self.identity, observe(self.fd))
+
+    def reopen_and_compare(self, anchor_fd, name):
+        """Reabre pelo nome sob a âncora e compara com a identidade registrada."""
+        fresh = _open_dir(anchor_fd, name)
+        try:
+            compare(self.identity, observe(fresh))
+        finally:
+            os.close(fresh)
+
+    def describe(self):
+        ident = dataclasses.asdict(self.identity)
+        return {"schema": "trusted-root-diagnostic/1", **INVARIANTS,
+                "identity": ident,
+                "identity_scope": "comparison_only",
+                "synthetic_only": True,
+                "owner_grant_implemented": False,
+                "owner_authenticated": False,
+                "aba_protection_proven": False,
+                "external_writers_excluded": False,
+                "anchor_provenance_verified": False}
+
+
+def _verify_marker(root_fd):
+    try:
+        fd = _sys_openat2(root_fd, MARKER_NAME.encode(),
+                          os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        raise RootRefused("not_synthetic") from None
+    try:
+        if not stat.S_ISREG(_fstat(fd).st_mode):
+            raise RootRefused("not_synthetic")
+        if os.read(fd, len(MARKER_CONTENT) + 1) != MARKER_CONTENT:
+            raise RootRefused("not_synthetic")
+    except OSError:
+        raise RootRefused("not_synthetic") from None
+    finally:
+        os.close(fd)
+
+
+def open_synthetic_root(anchor_fd, name):
+    """Abre e identifica uma raiz sintética sob anchor_fd.
+
+    O nome deve começar por SYNTHETIC_PREFIX e a pasta conter o marcador:
+    guardas contra uso acidental com caminhos reais, não prova de origem.
+    """
+    _check_name(name)
+    if not name.startswith(SYNTHETIC_PREFIX):
+        raise RootRefused("not_synthetic")
+    fd = _open_dir(anchor_fd, name)
+    try:
+        _verify_marker(fd)
+        return OpenedRoot(fd, observe(fd))
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def make_synthetic_fixture():
+    """Cria <tmp>/gh-f1-18-fixture-XXXX/gh-f1-18-synthetic-root com marcador.
+
+    Devolve (diretório_pai, nome). O chamador remove o pai com shutil.rmtree.
+    """
+    parent = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-fixture-"))
+    name = SYNTHETIC_PREFIX + "root"
+    root = os.path.join(parent, name)
+    os.mkdir(root, 0o700)
+    with open(os.path.join(root, MARKER_NAME), "wb") as marker:
+        marker.write(MARKER_CONTENT)
+    return parent, name
+
+
+def open_anchor(parent):
+    """Abre a âncora sintética (sem seguir symlink final)."""
+    return os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+
+def main(argv):
+    import json
+    if list(argv) not in (["--synthetic-only"], ["--synthetic-only", "--json"]):
+        print("uso: trusted_root.py --synthetic-only [--json]", file=sys.stderr)
+        return 64
+    parent, name = make_synthetic_fixture()
+    anchor = open_anchor(parent)
+    try:
+        try:
+            with open_synthetic_root(anchor, name) as root:
+                report = root.describe()
+                report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
+        except RootRefused as refused:
+            report = {"schema": "trusted-root-diagnostic/1", **INVARIANTS,
+                      "result": "REFUSED", "reason": refused.code,
+                      "synthetic_only": True}
+    finally:
+        os.close(anchor)
+        shutil.rmtree(parent, ignore_errors=True)
+    print(json.dumps(report, indent=2, sort_keys=True) if "--json" in argv
+          else report["result"])
+    return 2  # nunca 0: o diagnóstico não autoriza nada
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
