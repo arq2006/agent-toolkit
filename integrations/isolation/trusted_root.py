@@ -39,12 +39,18 @@ INVARIANTS = types.MappingProxyType({
 })
 _NEVER_TRUE = ("bootstrap_trusted", "bootstrap_complete", "owner_authenticated",
                "owner_grant_implemented", "aba_protection_proven",
-               "external_writers_excluded", "anchor_provenance_verified")
+               "external_writers_excluded", "anchor_provenance_verified",
+               "inventory_effectively_complete", "unobserved_capabilities_excluded")
+CLEANUP_CODES = ("anchor_close", "root_close", "fixture_remove")
+_ROOT_RESULTS = ("IDENTITY_OBSERVED_NOT_AUTHORIZED", "OBSERVED_WITH_CLEANUP_FAILURE",
+                 "REFUSED")
 
 
 def check_report(report):
     """Recusa (ValueError) um relatório cujas invariantes não sejam exatamente
-    as constantes, com tipos exatos. Não é prova contra processo comprometido."""
+    as constantes, com tipos exatos. Campos "nunca verdadeiros" só são exigidos
+    quando presentes (não são adicionados artificialmente). Não é prova contra
+    processo comprometido."""
     if type(report) is not dict:
         raise ValueError("report_not_dict")
     for key, value in INVARIANTS.items():
@@ -52,9 +58,31 @@ def check_report(report):
                 or report[key] != value:
             raise ValueError("invariant_violated")
     for key in _NEVER_TRUE:
-        if key in report and report[key] is not False:
+        if key in report and not (type(report[key]) is bool and report[key] is False):
             raise ValueError("invariant_violated")
     return report
+
+
+def check_root_report(report):
+    """Invariantes + coerência entre result, reason e cleanup_failures."""
+    check_report(report)
+    result = report.get("result")
+    failures = report.get("cleanup_failures")
+    if result not in _ROOT_RESULTS or type(failures) is not list \
+            or any(f not in CLEANUP_CODES for f in failures) \
+            or failures != sorted(set(failures)):
+        raise ValueError("report_malformed")
+    if (result == "REFUSED") != ("reason" in report) \
+            or ("reason" in report and type(report["reason"]) is not str):
+        raise ValueError("report_malformed")
+    if result == "IDENTITY_OBSERVED_NOT_AUTHORIZED" and failures:
+        raise ValueError("report_contradictory")      # limpeza falha ≠ sucesso integral
+    if result == "OBSERVED_WITH_CLEANUP_FAILURE" and not failures:
+        raise ValueError("report_contradictory")
+    if result != "REFUSED" and report.get("synthetic_only") is not True:
+        raise ValueError("report_malformed")
+    return report
+
 
 # UAPI Linux: x86_64 e arm64/aarch64; outras arquiteturas recusadas.
 _NR_OPENAT2 = 437
@@ -378,21 +406,54 @@ def open_synthetic_root(anchor_fd, name):
         raise
 
 
+class FixtureSetupError(Exception):
+    """Criação parcial da fixture falhou; `reason` e `cleanup_failures` são
+    códigos sanitizados (sem caminhos)."""
+
+    def __init__(self, reason, cleanup_failures):
+        super().__init__(reason)
+        self.reason = reason
+        self.cleanup_failures = list(cleanup_failures)
+
+
+def _remove_fixture(parent):
+    """Remove SOMENTE uma fixture criada por make_synthetic_fixture neste
+    processo (nome, diretório temporário e não-symlink conferidos). Devolve a
+    lista de códigos de falha; vazia só se o diretório realmente sumiu."""
+    safe = (isinstance(parent, str)
+            and os.path.basename(parent).startswith("gh-f1-18-fixture-")
+            and os.path.dirname(parent) == os.path.realpath(tempfile.gettempdir())
+            and not os.path.islink(parent))
+    if safe:
+        try:
+            shutil.rmtree(parent)
+        except OSError:
+            pass
+    return ["fixture_remove"] if (not safe or os.path.lexists(parent)) else []
+
+
 def make_synthetic_fixture():
     """Cria <tmp>/gh-f1-18-fixture-XXXX/gh-f1-18-synthetic-root com marcador.
 
-    Devolve (diretório_pai, nome). O chamador remove o pai com shutil.rmtree.
+    Devolve (diretório_pai, nome). Se a criação falhar depois do mkdtemp, a
+    fixture parcial é removida e a falha (e a de limpeza, se houver) sobe como
+    FixtureSetupError. O chamador remove o pai com _remove_fixture.
     """
     parent = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-fixture-"))
     name = SYNTHETIC_PREFIX + "root"
     root = os.path.join(parent, name)
     try:
         os.mkdir(root, 0o700)
-        with open(os.path.join(root, MARKER_NAME), "wb") as marker:
-            marker.write(MARKER_CONTENT)
-    except BaseException:
-        shutil.rmtree(parent, ignore_errors=True)  # não deixa fixture parcial
-        raise
+        fd = os.open(os.path.join(root, MARKER_NAME),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600)
+        try:
+            if os.write(fd, MARKER_CONTENT) != len(MARKER_CONTENT):
+                raise OSError(errno.EIO, "short write")
+        finally:
+            os.close(fd)
+    except Exception as e:
+        raise FixtureSetupError(_infra_code(e), _remove_fixture(parent)) from None
     return parent, name
 
 
@@ -401,49 +462,59 @@ def open_anchor(parent):
     return os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
 
 
+def _infra_code(exc):
+    if isinstance(exc, RootRefused):
+        return exc.code
+    if isinstance(exc, OSError):
+        return "infrastructure_" + errno.errorcode.get(exc.errno, "error")
+    return "unexpected_failure"
+
+
 def _refused_report(reason, cleanup_failures=()):
-    return check_report({"schema": "trusted-root-diagnostic/1", **INVARIANTS,
-                         "result": "REFUSED", "reason": reason,
-                         "synthetic_only": True,
-                         "cleanup_failures": sorted(cleanup_failures)})
+    return check_root_report({
+        "schema": "trusted-root-diagnostic/1", **INVARIANTS,
+        "result": "REFUSED", "reason": reason, "synthetic_only": True,
+        "cleanup_failures": sorted(set(cleanup_failures))})
 
 
 def _run_synthetic():
     """Cria, abre, descreve e limpa a fixture. Nunca levanta: qualquer falha vira
-    relatório REFUSED com códigos sanitizados (sem caminhos nem tracebacks)."""
-    failures = []
+    relatório sanitizado (só códigos, sem caminhos nem tracebacks). Falha de
+    limpeza nunca aparece como sucesso integral."""
+    failures = set()
     report = None
-    parent = anchor = None
+    parent = anchor = root = None
     try:
         parent, name = make_synthetic_fixture()
         anchor = open_anchor(parent)
-        with open_synthetic_root(anchor, name) as root:
-            report = root.describe()
-            report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
-    except RootRefused as refused:
-        report = _refused_report(refused.code)
-    except OSError as e:
-        report = _refused_report("infrastructure_" + errno.errorcode.get(e.errno, "error"))
-    except Exception:
-        report = _refused_report("unexpected_failure")
+        root = open_synthetic_root(anchor, name)
+        report = root.describe()
+        report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
+    except FixtureSetupError as setup:
+        report = _refused_report(setup.reason)
+        failures.update(setup.cleanup_failures)
+    except Exception as e:
+        report = _refused_report(_infra_code(e))
+    if root is not None:
+        try:
+            root.close()
+        except OSError:
+            failures.add("root_close")
     if anchor is not None:
         try:
             os.close(anchor)
         except OSError:
-            failures.append("anchor_close")
+            failures.add("anchor_close")
     if parent is not None:
-        try:
-            shutil.rmtree(parent)
-        except OSError:
-            pass
-        if os.path.lexists(parent):
-            failures.append("fixture_remove")
-    if failures:
-        report = dict(report)
-        report["cleanup_failures"] = sorted(failures)
-    else:
-        report.setdefault("cleanup_failures", [])
-    return check_report(report)
+        failures.update(_remove_fixture(parent))
+    report = dict(report)
+    if failures and report["result"] != "REFUSED":
+        report["result"] = "OBSERVED_WITH_CLEANUP_FAILURE"
+    report["cleanup_failures"] = sorted(failures)
+    try:
+        return check_root_report(report)
+    except ValueError:      # nunca devolver relatório incoerente
+        return _refused_report("report_invalid", failures)
 
 
 def main(argv):

@@ -342,8 +342,19 @@ class CliSubprocessTests(unittest.TestCase):
         self.assertEqual((control.returncode, control.stdout.strip()),
                          (2, "IDENTITY_OBSERVED_NOT_AUTHORIZED"))
 
-class CliFaultInjectionTests(unittest.TestCase):
-    """_run_synthetic/main com falhas injetadas; controle positivo real."""
+def mkdir_failing_for_root(err=errno.EACCES):
+    """os.mkdir que só falha para a pasta-raiz sintética (mkdtemp segue normal)."""
+    real = os.mkdir
+
+    def fn(path, *a, **k):
+        if os.path.basename(str(path)).startswith(T.SYNTHETIC_PREFIX):
+            raise OSError(err, "/secret")
+        return real(path, *a, **k)
+    return mock.patch.object(T.os, "mkdir", side_effect=fn)
+
+
+class IsolatedTmpCase(unittest.TestCase):
+    """tempdir isolado para contar resíduos de FDs e diretórios."""
 
     def setUp(self):
         self.iso = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-iso-"))
@@ -377,14 +388,10 @@ class CliFaultInjectionTests(unittest.TestCase):
         self.assertEqual(bool(os.listdir(self.iso)), leaked_dir)
         return report
 
-    def test_positive_control_leaves_no_descriptors_or_directories(self):
-        rc, out, err, before = self.run_main()
-        report = json.loads(out)
-        self.assertEqual(rc, 2)
-        self.assertEqual(report["result"], "IDENTITY_OBSERVED_NOT_AUTHORIZED")
-        self.assertEqual(report["cleanup_failures"], [])
-        self.assertEqual(open_fds(), before)
-        self.assertEqual(os.listdir(self.iso), [])
+
+
+class CliFaultInjectionTests(IsolatedTmpCase):
+    """_run_synthetic/main com falhas injetadas (mocks)."""
 
     def test_fixture_creation_failure(self):
         with mock.patch.object(T, "make_synthetic_fixture",
@@ -392,7 +399,7 @@ class CliFaultInjectionTests(unittest.TestCase):
             self.assert_refused("infrastructure_ENOSPC", secret="/secret/path")
 
     def test_partial_fixture_is_removed_when_mkdir_fails(self):
-        with mock.patch.object(T.os, "mkdir", side_effect=OSError(errno.EACCES, "x")):
+        with mkdir_failing_for_root():
             self.assert_refused("infrastructure_EACCES")  # nenhum diretório sobrou
 
     def test_open_anchor_failure(self):
@@ -433,7 +440,8 @@ class CliFaultInjectionTests(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual(rc, 2)
         self.assertEqual(report["cleanup_failures"], ["anchor_close"])
-        self.assertEqual(report["result"], "IDENTITY_OBSERVED_NOT_AUTHORIZED")
+        # limpeza falha nunca aparece como sucesso integral
+        self.assertEqual(report["result"], "OBSERVED_WITH_CLEANUP_FAILURE")
         self.assert_sanitized(out, err, "/secret/path")
         self.assertEqual(open_fds(), before)
 
@@ -443,8 +451,90 @@ class CliFaultInjectionTests(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual(rc, 2)
         self.assertEqual(report["cleanup_failures"], ["fixture_remove"])
+        self.assertEqual(report["result"], "OBSERVED_WITH_CLEANUP_FAILURE")
         self.assert_sanitized(out, err, "/secret")
         self.assertEqual(len(os.listdir(self.iso)), 1)  # o resíduo é declarado, não escondido
+
+    def test_fixture_creation_and_cleanup_can_both_fail(self):
+        # mkdir falha E a remoção da fixture parcial também falha (duas falhas seguidas)
+        with mkdir_failing_for_root(), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "/secret")):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual((rc, report["result"], report["reason"]),
+                         (2, "REFUSED", "infrastructure_EACCES"))
+        self.assertEqual(report["cleanup_failures"], ["fixture_remove"])
+        self.assert_sanitized(out, err, "/secret")
+        self.assertEqual(open_fds(), before)
+        self.assertEqual(len(os.listdir(self.iso)), 1)   # resíduo declarado, não escondido
+
+    def test_marker_write_failure_cleans_up_or_reports(self):
+        with mock.patch.object(T.os, "write", side_effect=OSError(errno.EIO, "/secret")):
+            self.assert_refused("infrastructure_EIO", secret="/secret")  # limpou tudo
+        with mock.patch.object(T.os, "write", side_effect=OSError(errno.EIO, "/secret")), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "x")):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual((report["reason"], report["cleanup_failures"]),
+                         ("infrastructure_EIO", ["fixture_remove"]))
+        self.assertEqual(open_fds(), before)             # o FD do marcador foi fechado
+        self.assertEqual(len(os.listdir(self.iso)), 1)
+
+    def test_short_marker_write_is_a_failure(self):
+        with mock.patch.object(T.os, "write", return_value=1):
+            self.assert_refused("infrastructure_EIO")
+
+    def test_direct_fixture_error_carries_only_codes(self):
+        with mkdir_failing_for_root(), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "x")):
+            with self.assertRaises(T.FixtureSetupError) as caught:
+                T.make_synthetic_fixture()
+        self.assertEqual((caught.exception.reason, caught.exception.cleanup_failures),
+                         ("infrastructure_EACCES", ["fixture_remove"]))
+        self.assertNotIn(self.iso, str(caught.exception))
+        parent, name = T.make_synthetic_fixture()          # controle positivo
+        self.assertEqual(T._remove_fixture(parent), [])
+        self.assertFalse(os.path.lexists(parent))
+
+    def test_root_close_failure_is_reported(self):
+        real_close = T.OpenedRoot.close
+
+        def failing(self_):
+            real_close(self_)
+            raise OSError(errno.EIO, "/secret")
+        with mock.patch.object(T.OpenedRoot, "close", failing):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual((rc, report["cleanup_failures"], report["result"]),
+                         (2, ["root_close"], "OBSERVED_WITH_CLEANUP_FAILURE"))
+        self.assert_sanitized(out, err, "/secret")
+        self.assertEqual(open_fds(), before)
+
+    def test_several_cleanup_failures_are_all_reported(self):
+        real_open_anchor, real_close, seen = T.open_anchor, os.close, {}
+
+        def tracking(path):
+            seen["fd"] = real_open_anchor(path)
+            return seen["fd"]
+
+        def failing_close(fd):
+            real_close(fd)
+            if fd == seen.get("fd"):
+                raise OSError(errno.EIO, "x")
+        with mock.patch.object(T, "open_anchor", side_effect=tracking), \
+                mock.patch.object(T.os, "close", side_effect=failing_close), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "x")):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(report["cleanup_failures"], ["anchor_close", "fixture_remove"])
+        self.assertEqual(report["result"], "OBSERVED_WITH_CLEANUP_FAILURE")
+
+    def test_incoherent_report_is_replaced_by_a_refusal(self):
+        with mock.patch.object(T, "check_root_report", side_effect=[ValueError("x"), None]) as chk:
+            chk.side_effect = [ValueError("x"), {"ok": True}]
+            report = T._run_synthetic()
+        self.assertEqual(report, {"ok": True})
+        self.assertEqual(chk.call_count, 2)
 
     def test_text_mode_reports_cleanup_failures(self):
         with mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "x")):
@@ -453,12 +543,44 @@ class CliFaultInjectionTests(unittest.TestCase):
                 rc = T.main(["--synthetic-only"])
         self.assertEqual(rc, 2)
         self.assertEqual(out.getvalue().strip(),
-                         "IDENTITY_OBSERVED_NOT_AUTHORIZED; cleanup_failures=fixture_remove")
+                         "OBSERVED_WITH_CLEANUP_FAILURE; cleanup_failures=fixture_remove")
+
+class CleanupRealTests(IsolatedTmpCase):
+    """Sistema de arquivos e descritores reais, sem mocks."""
+
+    def test_positive_control_leaves_no_descriptors_or_directories(self):
+        rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["result"], "IDENTITY_OBSERVED_NOT_AUTHORIZED")
+        self.assertEqual(report["cleanup_failures"], [])
+        self.assertEqual(open_fds(), before)
+        self.assertEqual(os.listdir(self.iso), [])
 
     def test_invalid_usage_is_64(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(T.main([]), 64)
             self.assertEqual(T.main(["--json"]), 64)
+
+    def test_cleanup_only_removes_fixtures_made_by_this_module(self):
+        other = os.path.join(self.iso, "important-dir")
+        os.mkdir(other)
+        self.assertEqual(T._remove_fixture(other), ["fixture_remove"])      # nome errado
+        self.assertTrue(os.path.isdir(other))
+        elsewhere = os.path.join(self.iso, "sub")
+        os.mkdir(elsewhere)
+        lookalike = os.path.join(elsewhere, "gh-f1-18-fixture-fake")
+        os.mkdir(lookalike)
+        self.assertEqual(T._remove_fixture(lookalike), ["fixture_remove"])  # pai errado
+        self.assertTrue(os.path.isdir(lookalike))
+        victim = os.path.join(self.iso, "victim")
+        os.mkdir(victim)
+        link = os.path.join(self.iso, "gh-f1-18-fixture-link")
+        os.symlink(victim, link)
+        self.assertEqual(T._remove_fixture(link), ["fixture_remove"])       # symlink
+        self.assertTrue(os.path.isdir(victim))
+        for bad in (None, 7, b"x", ""):
+            self.assertEqual(T._remove_fixture(bad), ["fixture_remove"])
 
 
 class PureMockTests(unittest.TestCase):
@@ -482,6 +604,49 @@ class PureMockTests(unittest.TestCase):
         self.refused("mount_namespace_unknown", T.compare, dc.replace(base, mnt_ns=None), base)
         self.refused("invalid_identity", T.compare, base, {"dev": 1})
         self.refused("invalid_identity", T.compare, None, base)
+
+    def test_check_root_report_rejects_contradictions(self):
+        ok = T._refused_report("x", ["fixture_remove"])
+        T.check_root_report(ok)
+        observed = {**T.INVARIANTS, "schema": "trusted-root-diagnostic/1",
+                    "result": "IDENTITY_OBSERVED_NOT_AUTHORIZED", "synthetic_only": True,
+                    "cleanup_failures": []}
+        T.check_root_report(observed)
+        T.check_root_report({**observed, "result": "OBSERVED_WITH_CLEANUP_FAILURE",
+                             "cleanup_failures": ["anchor_close"]})
+        bad_cases = [
+            {"cleanup_failures": ["fixture_remove"]},               # sucesso integral com falha
+            {"result": "OBSERVED_WITH_CLEANUP_FAILURE"},             # falha sem código
+            {"result": "TRUSTED"}, {"result": None},
+            {"cleanup_failures": ["/home/x"]},                      # código não sanitizado
+            {"cleanup_failures": ["fixture_remove", "anchor_close"]},  # fora de ordem
+            {"cleanup_failures": "none"}, {"cleanup_failures": None},
+            {"reason": "x"},                                         # reason sem REFUSED
+            {"synthetic_only": False},
+            {"inventory_effectively_complete": True},
+            {"unobserved_capabilities_excluded": 1},
+            {"bootstrap_complete": "false"},
+        ]
+        for change in bad_cases:
+            with self.assertRaises(ValueError, msg=change):
+                T.check_root_report({**observed, **change})
+        with self.assertRaises(ValueError):
+            T.check_root_report({**ok, "reason": 7})
+        missing = dict(observed)
+        del missing["cleanup_failures"]
+        for junk in (missing, None, [], "x"):
+            with self.assertRaises(ValueError):
+                T.check_root_report(junk)
+
+    def test_check_report_validates_new_completeness_fields_only_when_present(self):
+        base = {**T.INVARIANTS}
+        T.check_report(base)                                   # ausentes: não exigidos
+        T.check_report({**base, "inventory_effectively_complete": False,
+                        "unobserved_capabilities_excluded": False})
+        for key in ("inventory_effectively_complete", "unobserved_capabilities_excluded"):
+            for value in (True, 1, 0, "false", None, [], 0.0):
+                with self.assertRaises(ValueError, msg=(key, value)):
+                    T.check_report({**base, key: value})
 
     def test_invariants_are_read_only_constants(self):
         self.assertEqual(dict(T.INVARIANTS), {
@@ -511,8 +676,8 @@ class PureMockTests(unittest.TestCase):
                 T.check_report(junk)
 
     def test_describe_and_refused_reports_keep_the_invariants(self):
-        refused = T._refused_report("whatever", ["b", "a"])
-        self.assertEqual(refused["cleanup_failures"], ["a", "b"])
+        refused = T._refused_report("whatever", ["fixture_remove", "anchor_close"])
+        self.assertEqual(refused["cleanup_failures"], ["anchor_close", "fixture_remove"])
         self.assertEqual(refused["strong"], "UNAVAILABLE")
         ident = T.RootIdentity(1, 2, 3, "unique", "mnt:[1]", 0x1100)
         report = T.OpenedRoot(None, ident).describe()

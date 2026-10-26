@@ -34,7 +34,7 @@ import types
 
 from trusted_root import INVARIANTS, check_report
 
-SCHEMA = "supervisor-boot-diagnostic/2"
+SCHEMA = "supervisor-boot-diagnostic/3"
 KINDS = ("directory", "regular", "chr_devnull", "chr_other", "tty",
          "fifo", "socket", "anon_inode", "other")
 _ENTRY_KEYS = frozenset(("fd", "kind", "dev", "ino", "cloexec", "flags",
@@ -45,10 +45,10 @@ _DEVNULL_RDEV = os.makedev(1, 3)
 _O_PATH = getattr(os, "O_PATH", 0o10000000)
 _ACCESS = {os.O_RDONLY: "rdonly", os.O_WRONLY: "wronly", os.O_RDWR: "rdwr"}
 _VERDICTS = ("CLEAN_FOR_GRANTS", "UNKNOWN_CAPABILITIES", "REFUSED")
+_PROVENANCE = ("none", "collected_in_process", "caller_supplied_unverified")
 _MAX_PROBE = 1 << 20
 _NR_KCMP = {"x86_64": 312, "amd64": 312, "aarch64": 272, "arm64": 272}
 _KCMP_FILE = 0
-_MINT = object()  # só as fábricas de CapabilityRegistry o possuem
 
 LIMITATIONS = (
     "diagnóstico de uma observação: descritores podem mudar depois dela",
@@ -58,7 +58,8 @@ LIMITATIONS = (
     "ausência de capacidades não observadas NÃO é comprovada",
     "identidade de open file description só via kcmp contra âncora do registro; sem kcmp, grants ficam unknown",
     "grants cobrem apenas FDs criados por este módulo; não autenticam origem externa",
-    "encapsulamento do registro não resiste a processo Python comprometido (A3 fora da garantia)",
+    "encapsulamento do registro (sem API de declaração, estado privado) NÃO resiste a código arbitrário no mesmo processo Python (A3 fora da garantia)",
+    "inventário recebido como dicionário não tem proveniência confiável só por passar na validação estrutural",
     "não fecha, não marca CLOEXEC e não reposiciona descritores herdados",
 )
 NOT_VERIFIED = (
@@ -73,7 +74,7 @@ _RESERVED = frozenset(INVARIANTS) | frozenset((
     "schema", "verdict", "bootstrap_trusted", "bootstrap_complete",
     "inventory_source", "close_range_used", "limitations", "not_verified",
     "inventory_structurally_consistent", "inventory_effectively_complete",
-    "unobserved_capabilities_excluded"))
+    "unobserved_capabilities_excluded", "inventory_provenance", "provenance"))
 
 
 class BootRefused(ValueError):
@@ -86,11 +87,12 @@ class BootRefused(ValueError):
 
 @dataclasses.dataclass(frozen=True)
 class Grant:
-    """Concessão nascida de uma fábrica: identidade E direitos do FD.
+    """Concessão emitida por uma fábrica do registro: identidade E direitos.
 
     `flags` é o F_GETFL completo (modo de acesso, O_PATH, O_APPEND, ...).
     `anchor_fd` é um dup privado (mesma open file description) usado para
-    comprovar por kcmp que o FD concedido não foi trocado.
+    comprovar por kcmp que o FD concedido não foi trocado. Construir um Grant
+    não concede nada: só vale o que o próprio registro emitiu e ainda guarda.
     """
     fd: int
     kind: str
@@ -100,11 +102,15 @@ class Grant:
     inheritable: bool
     purpose: str
     anchor_fd: int
-    _mint: object = dataclasses.field(default=None, repr=False, compare=False)
 
-    def __post_init__(self):
-        if self._mint is not _MINT:
-            raise TypeError("Grant só pode ser criado pelas fábricas do registro")
+
+class _Created:
+    """Recibo de um FD que uma fábrica criou agora e ainda não foi emitido."""
+    __slots__ = ("fd", "anchor", "entry", "purpose", "inheritable")
+
+    def __init__(self, fd, anchor, entry, purpose, inheritable):
+        self.fd, self.anchor, self.entry = fd, anchor, entry
+        self.purpose, self.inheritable = purpose, inheritable
 
 
 def _require_platform():
@@ -177,34 +183,82 @@ def _kcmp_same_ofd(fd_a, fd_b):
     return result == 0
 
 
-class CapabilityRegistry:
-    """Capacidades que ESTE processo criou. Não há registro por declaração.
+def _close_quietly(fd):
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
-    As fábricas abrem o objeto aqui e registram identidade e direitos logo
-    depois; `grants` é uma visão somente leitura. Os testes só chamam as
-    fábricas em subprocessos descartáveis.
+
+class CapabilityRegistry:
+    """Capacidades que ESTE processo criou. Não há API de declaração.
+
+    Só as fábricas (`place_devnull`, `make_pipe`) criam o FD e emitem o grant;
+    nenhum método aceita um FD já existente. `grants` é uma visão somente
+    leitura. `close()` (idempotente) libera as âncoras e invalida todos os
+    grants; os FDs entregues ao chamador (pipes, slots 0-2) não são fechados.
+    Os testes só chamam as fábricas em subprocessos descartáveis.
+
+    Limite: isto elimina o caminho de concessão por declaração da interface
+    operacional; não é fronteira de segurança contra código Python arbitrário
+    no mesmo processo, que pode alterar qualquer objeto (A3, fora da garantia).
     """
-    __slots__ = ("_grants",)
+    __slots__ = ("_grants", "_issued", "_pending", "_closed")
 
     def __init__(self):
         self._grants = {}
+        self._issued = set()    # ids dos Grants emitidos por ESTE registro
+        self._pending = []      # recibos criados e ainda não emitidos
+        self._closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     @property
     def grants(self):
         return types.MappingProxyType(self._grants)
 
-    def _record(self, fd, purpose, inheritable):
-        entry = _describe_fd(fd)
-        # Âncora >= 3 para nunca ocupar um slot padrão fechado.
-        anchor = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
-        try:
-            self._grants[fd] = Grant(fd, entry["kind"], entry["dev"], entry["ino"],
-                                     entry["flags"], inheritable, purpose, anchor,
-                                     _mint=_MINT)
-        except BaseException:
-            os.close(anchor)
-            raise
-        return fd
+    @property
+    def closed(self):
+        return self._closed
+
+    def _require_open(self):
+        if self._closed:
+            raise BootRefused("registry_closed")
+
+    def _issue(self, created):
+        """Emite o grant de um recibo criado por uma fábrica; recusa qualquer
+        outra coisa (inclusive um int: "registrar" um FD por declaração)."""
+        if type(created) is not _Created or not any(created is p for p in self._pending):
+            raise BootRefused("declaration_refused")
+        self._require_open()
+        self._pending = [p for p in self._pending if p is not created]
+        self._revoke(created.fd)
+        entry = created.entry
+        grant = Grant(created.fd, entry["kind"], entry["dev"], entry["ino"],
+                      entry["flags"], created.inheritable, created.purpose,
+                      created.anchor)
+        self._grants[created.fd] = grant
+        self._issued.add(id(grant))
+
+    def _revoke(self, fd):
+        grant = self._grants.pop(fd, None)
+        if grant is not None:
+            self._issued.discard(id(grant))
+            _close_quietly(grant.anchor_fd)
+
+    def close(self):
+        """Libera âncoras e invalida os grants. Idempotente."""
+        for fd in list(self._grants):
+            self._revoke(fd)
+        for created in self._pending:
+            _close_quietly(created.anchor)
+        self._pending = []
+        self._closed = True
 
     def place_devnull(self, target_fd):
         """Abre /dev/null NOVO (não duplica FD herdado) em 0, 1 ou 2, herdável.
@@ -214,14 +268,19 @@ class CapabilityRegistry:
         Se o slot estava fechado e open() reutilizou exatamente esse número,
         o dup2(fd, fd) seria um no-op: as flags são ajustadas explicitamente.
         Falha fechado: se o estado efetivo não for o contratado, levanta
-        BootRefused; um slot que esta chamada abriu é devolvido fechado.
+        BootRefused e nada é emitido; um slot que esta chamada abriu é devolvido
+        fechado. Se a falha ocorrer DEPOIS de o dup2 ter substituído o objeto
+        herdado, o slot permanece como /dev/null herdável, sem grant (a
+        autoridade herdada anterior já foi descartada e não é restaurável).
         """
+        self._require_open()
         if type(target_fd) is not int or target_fd not in (0, 1, 2):
             raise BootRefused("invalid_target")
         try:
             tmp = os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC)
         except OSError:
             raise BootRefused("place_devnull_failed") from None
+        anchor, issued = None, False
         try:
             st = os.fstat(tmp)
             if not stat.S_ISCHR(st.st_mode) or st.st_rdev != _DEVNULL_RDEV:
@@ -237,41 +296,56 @@ class CapabilityRegistry:
             if (state["kind"], state["cloexec"], state["access"], state["opath"]) \
                     != ("chr_devnull", False, "rdwr", False):
                 raise BootRefused("place_devnull_state")
-            return self._record(target_fd, "stdio_devnull", True)
-        except BootRefused:
-            self._close_quietly(tmp)  # se tmp reutilizou o slot, devolve-o fechado
+            # Âncora >= 3 para nunca ocupar um slot padrão fechado.
+            anchor = fcntl.fcntl(target_fd, fcntl.F_DUPFD_CLOEXEC, 3)
+            created = _Created(target_fd, anchor, state, "stdio_devnull", True)
+            self._pending.append(created)
+            self._issue(created)
+            issued = True
+            return target_fd
+        except BaseException as e:
+            _close_quietly(tmp)  # se tmp reutilizou o slot, devolve-o fechado
+            if anchor is not None and not issued:
+                _close_quietly(anchor)
+                self._pending = [p for p in self._pending if p.anchor != anchor]
+            if isinstance(e, BootRefused):
+                raise
+            if isinstance(e, OSError):
+                raise BootRefused("place_devnull_failed") from None
             raise
-        except OSError:
-            self._close_quietly(tmp)
-            raise BootRefused("place_devnull_failed") from None
-
-    @staticmethod
-    def _close_quietly(fd):
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
 
     def make_pipe(self):
-        """Pipe criado aqui, com CLOEXEC; devolve (leitura, escrita)."""
-        r, w = os.pipe2(os.O_CLOEXEC)
-        self._record(r, "supervisor_pipe_read", False)
-        self._record(w, "supervisor_pipe_write", False)
-        return r, w
+        """Pipe criado aqui, com CLOEXEC; devolve (leitura, escrita).
 
-
-def _mint_grant(fd, kind, dev, ino, flags, inheritable, purpose, anchor_fd):
-    """Apenas para testes com inventários sintéticos; não faz parte da API."""
-    return Grant(fd, kind, dev, ino, flags, inheritable, purpose, anchor_fd, _mint=_MINT)
-
-
-def _registry_with(*grants):
-    """Apenas para testes com inventários sintéticos; não faz parte da API."""
-    registry = CapabilityRegistry()
-    for grant in grants:
-        registry._grants[grant.fd] = grant
-    return registry
+        Tudo ou nada: se qualquer etapa falhar, nenhum grant é emitido e os
+        dois FDs e as âncoras são fechados.
+        """
+        self._require_open()
+        try:
+            r, w = os.pipe2(os.O_CLOEXEC)
+        except OSError:
+            raise BootRefused("make_pipe_failed") from None
+        made = []
+        try:
+            for fd, purpose in ((r, "supervisor_pipe_read"), (w, "supervisor_pipe_write")):
+                state = _describe_fd(fd)
+                anchor = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+                created = _Created(fd, anchor, state, purpose, False)
+                self._pending.append(created)
+                made.append(created)
+            for created in made:
+                self._issue(created)
+            return r, w
+        except BaseException as e:
+            for created in made:
+                self._revoke(created.fd)
+                _close_quietly(created.anchor)
+            self._pending = [p for p in self._pending if not any(p is m for m in made)]
+            _close_quietly(r)
+            _close_quietly(w)
+            if isinstance(e, (OSError, BootRefused)):
+                raise BootRefused("make_pipe_failed") from None
+            raise
 
 
 def _list_fd_names():
@@ -299,7 +373,9 @@ def collect_inventory():
     - sentinel_verified: o FD /dev/null aberto aqui reapareceu com a identidade;
     - probe_agrees: nenhum FD sondado ficou fora da listagem e exatamente um
       número listado (o da própria listagem) não existe mais;
-    - estável: uma segunda descrição de cada FD é idêntica à primeira.
+    - structurally_consistent: sentinela ok E duas descrições idênticas de cada
+      FD E uma segunda listagem coerente com a primeira.
+    O dicionário devolvido NÃO tem proveniência confiável para quem o recebe.
     """
     _require_platform()
     if threading.active_count() != 1:
@@ -313,7 +389,7 @@ def collect_inventory():
             if stat_file.read(32).split(b" ", 1)[0] != str(os.getpid()).encode():
                 raise BootRefused("proc_mismatch")
         limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-        if limit == resource.RLIM_INFINITY or limit > _MAX_PROBE:
+        if limit == resource.RLIM_INFINITY or not (3 <= limit <= _MAX_PROBE):
             raise BootRefused("probe_range_exceeded")
         sentinel = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
     except OSError:
@@ -347,9 +423,12 @@ def collect_inventory():
             entries.append(entry)
         try:
             again = [_describe_fd(e["fd"]) for e in entries]
-        except OSError:
+            relisted = {int(n) for n in _list_fd_names()}
+        except (OSError, ValueError):
             raise BootRefused("inventory_unstable") from None
-        stable = again == entries
+        # Nada novo (nem sumido) entre as duas listagens dentro do intervalo sondado.
+        stable = again == entries and (relisted & probed) == (listed & probed) \
+            and len(relisted - probed) == 1
     finally:
         os.close(sentinel)
     return {"structurally_consistent": bool(sentinel_ok and stable),
@@ -360,41 +439,60 @@ def collect_inventory():
 
 
 def _validate_inventory(inv):
+    """Valida tipos E relações entre campos. Passar aqui NÃO dá proveniência:
+    um dicionário recebido de fora continua sendo dado não confiável."""
     if type(inv) is not dict or set(inv) != _INVENTORY_KEYS:
         raise BootRefused("inventory_malformed")
     for key in ("structurally_consistent", "sentinel_verified", "probe_agrees"):
         if type(inv[key]) is not bool:
             raise BootRefused("inventory_malformed")
-    if type(inv["transient"]) is not int or type(inv["entries"]) is not list \
-            or type(inv["probe_range"]) is not int:
+    if any(type(inv[k]) is not int for k in ("transient", "probe_range")) \
+            or type(inv["entries"]) is not list or inv["transient"] < 0:
         raise BootRefused("inventory_malformed")
-    if not (inv["structurally_consistent"] and inv["sentinel_verified"]
-            and inv["probe_agrees"]):
-        raise BootRefused("inventory_inconsistent")
-    seen = set()
+    limit = inv["probe_range"]
+    if not (3 <= limit <= _MAX_PROBE):
+        raise BootRefused("inventory_malformed")
+    previous = -1
     for entry in inv["entries"]:
         if type(entry) is not dict or set(entry) != _ENTRY_KEYS:
             raise BootRefused("inventory_malformed")
-        if any(type(entry[k]) is not int for k in ("fd", "dev", "ino", "flags")) \
-                or entry["fd"] < 0:
+        if any(type(entry[k]) is not int or entry[k] < 0
+               for k in ("fd", "dev", "ino", "flags")):
             raise BootRefused("inventory_malformed")
         if any(type(entry[k]) is not bool for k in ("cloexec", "opath")):
             raise BootRefused("inventory_malformed")
         if entry["kind"] not in KINDS or type(entry["access"]) is not str \
                 or type(entry["target"]) is not str:
             raise BootRefused("inventory_malformed")
-        if entry["fd"] in seen:
+        if entry["fd"] <= previous:   # duplicata ou fora de ordem
             raise BootRefused("inventory_malformed")
-        seen.add(entry["fd"])
+        previous = entry["fd"]
+        # Campos derivados precisam concordar com os flags brutos.
+        if entry["access"] != _ACCESS.get(entry["flags"] & os.O_ACCMODE, "other") \
+                or entry["opath"] != bool(entry["flags"] & _O_PATH):
+            raise BootRefused("inventory_contradictory")
+        if entry["fd"] >= limit:      # fora do intervalo efetivamente sondado
+            raise BootRefused("inventory_contradictory")
+    # Relações entre as afirmações de sucesso.
+    if inv["structurally_consistent"] and not inv["sentinel_verified"]:
+        raise BootRefused("inventory_contradictory")
+    if inv["probe_agrees"] and inv["transient"] != 1:
+        raise BootRefused("inventory_contradictory")
+    if not (inv["structurally_consistent"] and inv["sentinel_verified"]
+            and inv["probe_agrees"]):
+        raise BootRefused("inventory_inconsistent")
 
 
 def _validate_registry(registry):
     if type(registry) is not CapabilityRegistry:
         raise BootRefused("invalid_registry")
+    if registry._closed:
+        raise BootRefused("registry_closed")
     grants = registry._grants
     for fd, grant in grants.items():
-        if type(grant) is not Grant or grant._mint is not _MINT or grant.fd != fd:
-            raise BootRefused("invalid_grant")
+        if type(grant) is not Grant or id(grant) not in registry._issued \
+                or grant.fd != fd:
+            raise BootRefused("invalid_grant")   # não emitido por este registro
         if grant.kind not in KINDS:
             raise BootRefused("unexpected_capability_kind")
         if any(type(v) is not int for v in (grant.dev, grant.ino, grant.flags,
@@ -442,7 +540,7 @@ def _classify(entry, grants, anchors, same_ofd):
     return "unknown", "no_grant", []
 
 
-def _evaluate(inventory, registry, same_ofd):
+def _evaluate(inventory, registry, same_ofd, provenance):
     _require_platform()
     grants = _validate_registry(registry)
     _validate_inventory(inventory)
@@ -461,16 +559,53 @@ def _evaluate(inventory, registry, same_ofd):
     grants_missing = sorted(fd for fd in grants if fd not in present)
     clean = not unknown and not std_closed and not grants_missing
     return _report("CLEAN_FOR_GRANTS" if clean else "UNKNOWN_CAPABILITIES",
-                   entries=classified, unknown_fds=unknown,
+                   provenance=provenance, entries=classified, unknown_fds=unknown,
                    std_closed=std_closed, grants_missing=grants_missing)
 
 
 def evaluate(inventory, registry):
-    """Valida o inventário e o confronta com o registro; levanta BootRefused."""
-    return _evaluate(inventory, registry, _kcmp_same_ofd)
+    """Valida o inventário e o confronta com o registro; levanta BootRefused.
+
+    O inventário é dado do chamador (proveniência não confiável); o relatório
+    o declara em `inventory_provenance`."""
+    return _evaluate(inventory, registry, _kcmp_same_ofd, "caller_supplied_unverified")
 
 
-def _report(verdict, /, **extra):
+def check_boot_report(report):
+    """Invariantes + coerência entre verdict e demais campos; levanta ValueError."""
+    check_report(report)
+    verdict = report.get("verdict")
+    if verdict not in _VERDICTS or report.get("schema") != SCHEMA:
+        raise ValueError("report_malformed")
+    for key in ("bootstrap_trusted", "bootstrap_complete",
+                "inventory_effectively_complete", "unobserved_capabilities_excluded"):
+        if key not in report:
+            raise ValueError("report_malformed")
+    consistent = report.get("inventory_structurally_consistent")
+    if type(consistent) is not bool or consistent != (verdict != "REFUSED"):
+        raise ValueError("report_contradictory")
+    if report.get("inventory_provenance") not in _PROVENANCE \
+            or report.get("close_range_used") is not False:
+        raise ValueError("report_malformed")
+    lists = ("entries", "unknown_fds", "std_closed", "grants_missing")
+    if verdict == "REFUSED":
+        if type(report.get("reason")) is not str or any(k in report for k in lists):
+            raise ValueError("report_contradictory")
+        return report
+    if "reason" in report or any(type(report.get(k)) is not list for k in lists):
+        raise ValueError("report_malformed")
+    entry_unknown = sorted(e["fd"] for e in report["entries"]
+                           if e.get("status") != "authorized")
+    if entry_unknown != sorted(report["unknown_fds"]):
+        raise ValueError("report_contradictory")
+    has_problem = bool(report["unknown_fds"] or report["std_closed"]
+                       or report["grants_missing"])
+    if has_problem != (verdict == "UNKNOWN_CAPABILITIES"):
+        raise ValueError("report_contradictory")
+    return report
+
+
+def _report(verdict, /, *, provenance="none", **extra):
     if verdict not in _VERDICTS:
         raise ValueError("invalid_verdict")
     if _RESERVED & set(extra):
@@ -478,17 +613,20 @@ def _report(verdict, /, **extra):
     report = {**extra, "schema": SCHEMA, **INVARIANTS, "verdict": verdict,
               "bootstrap_trusted": False, "bootstrap_complete": False,
               "inventory_source": "/proc/self/fd + fcntl probe",
+              "inventory_provenance": provenance,
               "close_range_used": False,
               "inventory_structurally_consistent": verdict != "REFUSED",
               "inventory_effectively_complete": False,
               "unobserved_capabilities_excluded": False,
               "limitations": list(LIMITATIONS), "not_verified": list(NOT_VERIFIED)}
-    return check_report(report)
+    return check_boot_report(report)
 
 
 def _diagnose(registry, collect):
+    provenance = ("collected_in_process" if collect is collect_inventory
+                  else "caller_supplied_unverified")
     try:
-        return evaluate(collect(), registry)
+        return _evaluate(collect(), registry, _kcmp_same_ofd, provenance)
     except BootRefused as refused:
         return _report("REFUSED", reason=refused.code)
     except Exception:  # evidência insuficiente, nunca sucesso implícito
@@ -505,7 +643,8 @@ def main(argv):
     if list(argv) not in (["--synthetic-only"], ["--synthetic-only", "--json"]):
         print("uso: supervisor_boot.py --synthetic-only [--json]", file=sys.stderr)
         return 64
-    report = diagnose(CapabilityRegistry())
+    with CapabilityRegistry() as registry:
+        report = diagnose(registry)
     print(json.dumps(report, indent=2, sort_keys=True) if "--json" in argv
           else report["verdict"])
     return 2  # nunca 0: o diagnóstico não autoriza nada

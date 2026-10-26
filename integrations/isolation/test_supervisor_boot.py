@@ -8,6 +8,10 @@ Categorias (uma classe por categoria; nenhum teste é contado duas vezes):
   subprocessos descartáveis (python -I), sem mocks.
 - ChildMixedTests: idem, mas o finding principal depende de uma falha injetada
   (listagem adulterada, os.open trocado etc.) DENTRO do subprocesso.
+Os testes puros montam registros sintéticos com o helper LOCAL
+`synthetic_registry`, que escreve no estado privado do registro (o que código
+no mesmo processo sempre poderia fazer: fora da garantia); o módulo de produção
+não oferece nenhuma API para isso.
 Toda manipulação de FD ocorre só nos filhos; o processo do operador e o
 terminal nunca são alterados. Timeout/saída malformada do filho = falha
 (evidência insuficiente). Sem kcmp o teste é pulado: skip NÃO é evidência.
@@ -34,10 +38,39 @@ notes, stages, pipes = {}, [], []
 real_open, real_list, real_describe = os.open, B._list_fd_names, B._describe_fd
 
 
+real_fcntl = B.fcntl.fcntl
+base = set()
+
+
+def openset():
+    found = set()
+    for fd in range(256):
+        try:
+            real_fcntl(fd, B.fcntl.F_GETFD)
+            found.add(fd)
+        except OSError:
+            pass
+    return found
+
+
+def failing(nth):
+    calls = [0]
+
+    def fn(fd, cmd, *a):
+        if cmd == B.fcntl.F_DUPFD_CLOEXEC:
+            calls[0] += 1
+            if calls[0] == nth:
+                raise OSError(24, "EMFILE")
+        return real_fcntl(fd, cmd, *a)
+    B.fcntl.fcntl = fn
+
+
 def attempt(name, fn):
     try:
         fn()
         notes[name] = "NO_ERROR"
+    except B.BootRefused as e:
+        notes[name] = "BootRefused:" + e.code
     except Exception as e:
         notes[name] = type(e).__name__
 
@@ -72,7 +105,10 @@ for step in steps:
     elif step.startswith("close"):
         os.close(int(step[5:]))
     elif step == "pipe":
-        pipes.append(reg.make_pipe())
+        try:
+            pipes.append(reg.make_pipe())
+        except B.BootRefused as e:
+            notes["pipe"] = e.code
     elif step == "rawfile":
         real_open(probe, os.O_RDONLY | os.O_CLOEXEC)
     elif step == "rawfile_inherit":
@@ -102,7 +138,8 @@ for step in steps:
         attempt("grants_setitem", setitem)
         attempt("grants_assign", lambda: setattr(reg, "grants", {}))
         attempt("new_attribute", lambda: setattr(reg, "extra", 1))
-        attempt("grant_ctor", lambda: B.Grant(5, "regular", 1, 2, 0, False, "x", 9))
+        attempt("grant_by_declaration",
+                lambda: reg._issue(B.Grant(5, "regular", 1, 2, 0, False, "x", 9)))
         attempt("grants_pop", lambda: reg.grants.pop(1))
     elif step == "list_omit_real":
         listing(lambda names: drop(names, pipes[0][0]))
@@ -143,6 +180,34 @@ for step in steps:
         B.resource.getrlimit = lambda r: (resource.RLIM_INFINITY, resource.RLIM_INFINITY)
     elif step == "platform_darwin":
         B.sys.platform = "darwin"
+    elif step == "mark_base":
+        base = openset()
+    elif step.startswith("diff:"):
+        now = openset()
+        notes[step[5:]] = {"added": sorted(now - base), "removed": sorted(base - now)}
+    elif step == "fail_anchor":
+        failing(1)
+    elif step == "fail_anchor_second":
+        failing(2)
+    elif step == "restore_fcntl":
+        B.fcntl.fcntl = real_fcntl
+    elif step == "declare_int":
+        for fd in (0, 1, 2):
+            attempt("declare%d" % fd, lambda fd=fd: reg._issue(fd))
+    elif step == "declare_forged":
+        forged = B._Created(0, 3, B._describe_fd(0), "forged", True)
+        attempt("declare_forged", lambda: reg._issue(forged))
+    elif step == "shutdown_registry":
+        reg.close()
+        reg.close()                                  # idempotente
+        attempt("place_after_close", lambda: reg.place_devnull(0))
+        attempt("pipe_after_close", lambda: reg.make_pipe())
+        notes["grants_after_close"] = len(reg.grants)
+    elif step == "reuse_closed_pipe_read":
+        os.close(pipes[0][0])
+        real_open(probe, os.O_RDONLY | os.O_CLOEXEC)
+    elif step == "kcmp_unavailable":
+        B.platform.machine = lambda: "riscv64"
     elif step == "eval":
         stages.append(B.diagnose(reg))
     else:
@@ -170,6 +235,10 @@ def run_child(steps=(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             return json.load(f)
 
 
+def inherited_file():
+    return tempfile.TemporaryFile()
+
+
 def final(steps=(), **kw):
     return run_child([*steps, "eval"], **kw)["stages"][-1]
 
@@ -195,8 +264,18 @@ def inventory(*entries, **over):
 
 
 def grant(fd, kind="chr_devnull", dev=5, ino=6, flags=2, inheritable=True, anchor=None):
-    return B._mint_grant(fd, kind, dev, ino, flags, inheritable, "stdio_devnull",
-                         100 + fd if anchor is None else anchor)
+    return B.Grant(fd, kind, dev, ino, flags, inheritable, "stdio_devnull",
+                   100 + fd if anchor is None else anchor)
+
+
+def synthetic_registry(*grants):
+    """SOMENTE TESTES: escreve no estado privado, como código no mesmo processo
+    sempre poderia. Não existe API de produção equivalente."""
+    registry = B.CapabilityRegistry()
+    for g in grants:
+        registry._grants[g.fd] = g
+        registry._issued.add(id(g))
+    return registry
 
 
 def std_inventory():
@@ -204,17 +283,17 @@ def std_inventory():
 
 
 def std_registry():
-    return B._registry_with(grant(0), grant(1), grant(2))
+    return synthetic_registry(grant(0), grant(1), grant(2))
 
 
-def ev(inv, reg, same=lambda a, b: True):
-    return B._evaluate(inv, reg, same)
+def ev(inv, reg, same=lambda a, b: True, provenance="caller_supplied_unverified"):
+    return B._evaluate(inv, reg, same, provenance)
 
 
 class PureLogicTests(unittest.TestCase):
     def refused(self, code, inv, reg=None, same=lambda a, b: True):
         with self.assertRaises(B.BootRefused) as caught:
-            B._evaluate(inv, reg or std_registry(), same)
+            B._evaluate(inv, reg or std_registry(), same, 'caller_supplied_unverified')
         self.assertEqual(caught.exception.code, code)
 
     def test_positive_control_all_granted(self):
@@ -236,7 +315,7 @@ class PureLogicTests(unittest.TestCase):
 
     def test_extra_fd_and_sensitive_slots_are_unknown(self):
         report = ev(inventory(entry(0), entry(1), entry(2),
-                              entry(7, "regular", 1, 2, True, 0, "<redacted-path>")),
+                              entry(7, "regular", 1, 2, True, 0, "<redacted-path>", access="rdonly")),
                     std_registry())
         self.assertEqual(report["unknown_fds"], [7])
         for kind in ("socket", "regular", "directory", "tty", "fifo"):
@@ -261,15 +340,15 @@ class PureLogicTests(unittest.TestCase):
         ev(std_inventory(), std_registry())  # controle positivo
 
     def test_read_grant_does_not_authorize_write_end(self):
-        reg = B._registry_with(grant(5, "fifo", 7, 8, flags=0, inheritable=False),
-                               grant(6, "fifo", 7, 8, flags=1, inheritable=False))
+        reg = synthetic_registry(grant(5, "fifo", 7, 8, flags=0, inheritable=False),
+                                 grant(6, "fifo", 7, 8, flags=1, inheritable=False))
         good = [entry(5, "fifo", 7, 8, True, 0, "pipe:[1]", access="rdonly"),
                 entry(6, "fifo", 7, 8, True, 1, "pipe:[1]", access="wronly")]
         base = [entry(0), entry(1), entry(2)]
-        self.assertEqual(ev(inventory(*base, *good), B._registry_with(
+        self.assertEqual(ev(inventory(*base, *good), synthetic_registry(
             grant(0), grant(1), grant(2), *reg.grants.values()))["unknown_fds"], [])
         swapped = [dict(good[1], fd=5), dict(good[0], fd=6)]  # extremos trocados
-        report = ev(inventory(*base, *swapped), B._registry_with(
+        report = ev(inventory(*base, *swapped), synthetic_registry(
             grant(0), grant(1), grant(2), *reg.grants.values()))
         self.assertEqual(report["unknown_fds"], [5, 6])
         self.assertEqual(set(report["entries"][3]["mismatch"]), {"access"})
@@ -283,7 +362,7 @@ class PureLogicTests(unittest.TestCase):
         self.assertEqual(report["entries"][0]["mismatch"], ["ofd_unverifiable"])
 
     def test_registry_anchors_are_accounted_for_but_not_trusted_blindly(self):
-        reg = B._registry_with(grant(0, anchor=10), grant(1, anchor=11), grant(2, anchor=12))
+        reg = synthetic_registry(grant(0, anchor=10), grant(1, anchor=11), grant(2, anchor=12))
         anchors = [entry(10, cloexec=True), entry(11, cloexec=True), entry(12, cloexec=True)]
         report = ev(inventory(entry(0), entry(1), entry(2), *anchors), reg)
         self.assertEqual(report["verdict"], "CLEAN_FOR_GRANTS")
@@ -302,7 +381,7 @@ class PureLogicTests(unittest.TestCase):
 
     def test_cloexec_unknown_is_still_reported(self):
         report = ev(inventory(entry(0), entry(1), entry(2),
-                              entry(5, "regular", 1, 2, True, 0, "<redacted-path>")),
+                              entry(5, "regular", 1, 2, True, 0, "<redacted-path>", access="rdonly")),
                     std_registry())
         self.assertTrue(report["entries"][3]["cloexec"])
         self.assertEqual(report["entries"][3]["status"], "unknown")
@@ -311,28 +390,98 @@ class PureLogicTests(unittest.TestCase):
         ev(std_inventory(), std_registry())  # controle positivo
         cases = {
             "inventory_inconsistent": [{"structurally_consistent": False},
-                                       {"sentinel_verified": False},
-                                       {"probe_agrees": False}],
+                                       {"probe_agrees": False},
+                                       {"probe_agrees": False, "transient": 2}],
             "inventory_malformed": [
-                {"entries": None}, {"transient": "1"}, {"probe_range": None},
+                {"entries": None}, {"transient": "1"}, {"transient": -1},
+                {"probe_range": None}, {"probe_range": True}, {"probe_range": 2},
+                {"probe_range": 0}, {"probe_range": (1 << 20) + 1},
                 {"probe_agrees": 1}, {"entries": [entry(0), entry(0)]},
+                {"entries": [entry(1), entry(0)]},                      # fora de ordem
                 {"entries": [entry(0), {**entry(1), "fd": True}]},
                 {"entries": [entry(0), {**entry(1), "fd": -1}]},
+                {"entries": [entry(0), {**entry(1), "ino": -1}]},
                 {"entries": [entry(0), {**entry(1), "kind": "wormhole"}]},
                 {"entries": [entry(0), {**entry(1), "cloexec": 1}]},
                 {"entries": [entry(0), {k: v for k, v in entry(1).items() if k != "ino"}]},
                 {"entries": [entry(0), {**entry(1), "extra": 1}]},
                 {"entries": ["fd=1"]}, {"surprise": 1}],
+            "inventory_contradictory": [
+                # sucesso estrutural declarado sem a sentinela que o sustenta
+                {"sentinel_verified": False},
+                # probe_agrees implica exatamente um transitório
+                {"transient": 0}, {"transient": 2},
+                # campos derivados contradizem os flags brutos
+                {"entries": [entry(0), {**entry(1), "access": "rdonly"}, entry(2)]},
+                {"entries": [entry(0), {**entry(1), "flags": 0}, entry(2)]},
+                {"entries": [entry(0), {**entry(1), "opath": True}, entry(2)]},
+                {"entries": [entry(0), {**entry(1), "flags": 2 | os.O_PATH}, entry(2)]},
+                # FD fora do intervalo efetivamente sondado
+                {"probe_range": 4, "entries": [entry(0), entry(1), entry(2), entry(4)]},
+                {"probe_range": 1024, "entries": [entry(0), entry(1), entry(2), entry(1024)]}],
         }
         for code, mutations in cases.items():
             for mutation in mutations:
                 self.refused(code, {**std_inventory(), **mutation})
+        # fronteira válida: último FD logo abaixo do limite sondado
+        ev(inventory(entry(0), entry(1), entry(2), entry(1023)), std_registry())
         legacy = std_inventory()
         legacy["complete"] = True
         del legacy["probe_agrees"]
         self.refused("inventory_malformed", legacy)
         for junk in (None, [], "x", {}):
             self.refused("inventory_malformed", junk)
+
+    def test_validated_inventory_still_has_no_provenance(self):
+        report = B.evaluate(std_inventory(), std_registry())
+        self.assertEqual(report["inventory_provenance"], "caller_supplied_unverified")
+        self.assertIs(report["inventory_effectively_complete"], False)
+        self.assertIs(report["unobserved_capabilities_excluded"], False)
+        self.assertTrue(any("proveniência" in text for text in report["limitations"]))
+        self.assertEqual(B._diagnose(std_registry(), lambda: std_inventory())[
+            "inventory_provenance"], "caller_supplied_unverified")
+        self.assertEqual(B._report("REFUSED", reason="x")["inventory_provenance"], "none")
+
+    def test_no_declaration_api_exists_in_production(self):
+        for name in ("_MINT", "_mint_grant", "_registry_with", "_record"):
+            self.assertFalse(hasattr(B, name), name)
+            self.assertFalse(hasattr(B.CapabilityRegistry, name), name)
+        reg = B.CapabilityRegistry()
+        hand_built = B.Grant(0, "chr_devnull", 5, 6, 2, True, "x", 9)
+        for bad in (0, 1, 2, 7, None, "0", (1, "x"), hand_built):
+            with self.assertRaises(B.BootRefused, msg=repr(bad)) as caught:
+                reg._issue(bad)
+            self.assertEqual(caught.exception.code, "declaration_refused")
+        # um recibo montado à mão não está entre os criados pelas fábricas
+        forged = B._Created(0, 3, entry(0), "forged", True)
+        with self.assertRaises(B.BootRefused) as caught:
+            reg._issue(forged)
+        self.assertEqual(caught.exception.code, "declaration_refused")
+        self.assertEqual(dict(reg.grants), {})
+
+    def test_hand_built_grants_are_only_trusted_if_this_registry_issued_them(self):
+        ev(std_inventory(), std_registry())  # controle positivo
+        injected = B.CapabilityRegistry()
+        injected._grants[0] = grant(0)     # sem passar por _issue (fora da garantia)
+        self.refused("invalid_grant", std_inventory(), injected)
+
+    def test_closed_registry_invalidates_its_grants_and_close_is_idempotent(self):
+        reg = std_registry()
+        ev(std_inventory(), reg)
+        reg.close()
+        reg.close()
+        self.assertTrue(reg.closed)
+        self.assertEqual(dict(reg.grants), {})
+        self.refused("registry_closed", std_inventory(), reg)
+        for call in (lambda: reg.place_devnull(0), reg.make_pipe):
+            with self.assertRaises(B.BootRefused) as caught:
+                call()
+            self.assertEqual(caught.exception.code, "registry_closed")
+
+    def test_registry_context_manager_closes(self):
+        with B.CapabilityRegistry() as reg:
+            self.assertFalse(reg.closed)
+        self.assertTrue(reg.closed)
 
     def test_registry_cannot_be_forged_through_public_surface(self):
         reg = B.CapabilityRegistry()
@@ -342,10 +491,6 @@ class PureLogicTests(unittest.TestCase):
             reg.grants = {}
         with self.assertRaises(AttributeError):
             reg.other = 1
-        with self.assertRaises(TypeError):
-            B.Grant(5, "regular", 1, 2, 0, False, "x", 9)
-        with self.assertRaises(TypeError):
-            B.Grant(5, "regular", 1, 2, 0, False, "x", 9, _mint=object())
 
         class Sub(B.CapabilityRegistry):
             pass
@@ -355,9 +500,9 @@ class PureLogicTests(unittest.TestCase):
         tampered = std_registry()
         tampered._grants[0] = ("0", "chr_devnull")
         self.refused("invalid_grant", std_inventory(), tampered)
-        wild = B._registry_with(B._mint_grant(9, "kernel_gift", 1, 1, 0, False, "x", 99))
+        wild = synthetic_registry(B.Grant(9, "kernel_gift", 1, 1, 0, False, "x", 99))
         self.refused("unexpected_capability_kind", std_inventory(), wild)
-        collide = B._registry_with(grant(0, anchor=1), grant(1, anchor=1))
+        collide = synthetic_registry(grant(0, anchor=1), grant(1, anchor=1))
         self.refused("invalid_grant", std_inventory(), collide)
 
     def test_place_devnull_rejects_targets_outside_stdio_before_touching_fds(self):
@@ -367,8 +512,8 @@ class PureLogicTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "invalid_target")
 
     def test_reserved_report_fields_cannot_be_overridden(self):
-        base = B._report("UNKNOWN_CAPABILITIES")
-        self.assertEqual(base["verdict"], "UNKNOWN_CAPABILITIES")
+        base = B._report("REFUSED", reason="x")
+        self.assertEqual(base["verdict"], "REFUSED")
         for field, value in (("strong", "STRONG"), ("readiness", "READY"),
                              ("agent_execution_authorized", True),
                              ("file_operations_authorized", True),
@@ -377,12 +522,16 @@ class PureLogicTests(unittest.TestCase):
                              ("bootstrap_trusted", True), ("bootstrap_complete", True),
                              ("verdict", "CLEAN_FOR_GRANTS"), ("schema", "x"),
                              ("inventory_effectively_complete", True),
+                             ("unobserved_capabilities_excluded", True),
+                             ("inventory_provenance", "collected_in_process"),
                              ("limitations", [])):
             with self.assertRaises(ValueError, msg=field) as caught:
                 B._report("REFUSED", **{field: value})
             self.assertEqual(str(caught.exception), "reserved_field")
         with self.assertRaises(ValueError):
             B._report("TRUSTED")
+        with self.assertRaises(ValueError):          # proveniência inventada
+            B._report("REFUSED", provenance="trusted_by_owner", reason="x")
 
     def test_invariants_are_read_only_and_reports_are_independent_copies(self):
         with self.assertRaises(TypeError):
@@ -391,10 +540,10 @@ class PureLogicTests(unittest.TestCase):
         report = B._report("REFUSED", reason="x")
         report["strong"] = "STRONG"            # alterar a cópia não toca a constante
         self.assertEqual(T.INVARIANTS["strong"], "UNAVAILABLE")
-        self.assertEqual(B._report("REFUSED")["strong"], "UNAVAILABLE")
+        self.assertEqual(B._report("REFUSED", reason="x")["strong"], "UNAVAILABLE")
 
     def test_check_report_rejects_tampered_or_mistyped_invariants(self):
-        good = B._report("REFUSED")
+        good = B._report("REFUSED", reason="x")
         T.check_report(good)
         for key, value in (("agent_execution_authorized", True),
                            ("agent_execution_authorized", 0),
@@ -412,6 +561,89 @@ class PureLogicTests(unittest.TestCase):
         for junk in (missing, None, [], "x"):
             with self.assertRaises(ValueError):
                 T.check_report(junk)
+
+    def test_check_boot_report_rejects_contradictory_or_tampered_reports(self):
+        clean = ev(std_inventory(), std_registry())
+        unknown = ev(inventory(entry(0), entry(1), entry(2), entry(7, "regular", 1, 2, True, 0,
+                                                                     "<redacted-path>",
+                                                                     access="rdonly")),
+                     std_registry())
+        refused = B._report("REFUSED", reason="x")
+        for good in (clean, unknown, refused):
+            B.check_boot_report(good)
+
+        def tampered(report, **changes):
+            bad = dict(report)
+            bad.update(changes)
+            with self.assertRaises(ValueError, msg=changes):
+                B.check_boot_report(bad)
+        # 1. campos reservados/novos de completude alterados
+        for key in ("inventory_effectively_complete", "unobserved_capabilities_excluded",
+                    "bootstrap_trusted", "bootstrap_complete", "agent_execution_authorized"):
+            for value in (True, 1, 0, "false", None):
+                tampered(clean, **{key: value})
+        # 2. booleanos com tipo errado
+        for value in (1, 0, "true", None):
+            tampered(clean, inventory_structurally_consistent=value)
+            tampered(clean, close_range_used=value)
+        # 3. campo obrigatório ausente
+        for key in ("strong", "readiness", "verdict", "schema", "bootstrap_trusted",
+                    "inventory_effectively_complete", "unobserved_capabilities_excluded",
+                    "inventory_provenance", "inventory_structurally_consistent"):
+            missing = dict(clean)
+            del missing[key]
+            with self.assertRaises(ValueError, msg=key):
+                B.check_boot_report(missing)
+        # 4. veredito incompatível com a observação
+        tampered(clean, verdict="UNKNOWN_CAPABILITIES")        # nada desconhecido
+        tampered(unknown, verdict="CLEAN_FOR_GRANTS")           # há desconhecido
+        tampered(clean, verdict="REFUSED")                      # tem entries/consistente
+        tampered(refused, verdict="CLEAN_FOR_GRANTS")
+        tampered(refused, inventory_structurally_consistent=True)
+        tampered(clean, inventory_structurally_consistent=False)
+        tampered(clean, unknown_fds=[0])                        # lista vs entries
+        tampered(unknown, unknown_fds=[])
+        tampered(clean, verdict="TRUSTED")
+        tampered(clean, inventory_provenance="trusted_by_owner")
+        tampered(refused, reason=None)
+        tampered(refused, entries=[])
+        # 5. estrutura malformada
+        for junk in (None, [], "x", {}):
+            with self.assertRaises(ValueError):
+                B.check_boot_report(junk)
+        tampered(clean, entries="all-good")
+
+    def test_report_builder_refuses_incoherent_results(self):
+        # "CLEAN" com listas inconsistentes não pode ser construído pelas rotas internas
+        with self.assertRaises(ValueError):
+            B._report("CLEAN_FOR_GRANTS", entries=[], unknown_fds=[0], std_closed=[],
+                      grants_missing=[])
+        with self.assertRaises(ValueError):
+            B._report("UNKNOWN_CAPABILITIES", entries=[], unknown_fds=[], std_closed=[],
+                      grants_missing=[])
+        with self.assertRaises(ValueError):
+            B._report("REFUSED")                      # sem reason
+        B._report("CLEAN_FOR_GRANTS", entries=[], unknown_fds=[], std_closed=[],
+                  grants_missing=[])
+
+    def test_unexpected_diagnosis_failure_is_a_conservative_refusal(self):
+        reg = std_registry()
+        # saída do coletor com estrutura que passa a validação mas quebra a avaliação
+        original = B._classify
+
+        def explode(*args):
+            raise RuntimeError("/secret/path unexpected")
+        B._classify = explode
+        try:
+            report = B._diagnose(reg, lambda: std_inventory())
+        finally:
+            B._classify = original
+        self.assertEqual((report["verdict"], report["reason"]),
+                         ("REFUSED", "evidence_insufficient"))
+        self.assertNotIn("secret", json.dumps(report))
+        control = B._diagnose(reg, lambda: std_inventory())   # controle, sem a falha
+        self.assertNotIn("reason", control)
+        self.assertEqual(control["inventory_provenance"], "caller_supplied_unverified")
 
     def test_diagnose_turns_every_failure_into_refusal(self):
         reg = std_registry()
@@ -546,6 +778,46 @@ class ChildProcessTests(unittest.TestCase):
         # kind, dev, ino, flags e CLOEXEC idênticos: só a OFD (kcmp) diferencia
         self.assertEqual(mismatch_of(report, 1), {"ofd"})
 
+    def test_inherited_fds_cannot_be_registered_by_declaration(self):
+        with tempfile.TemporaryFile() as inherited:
+            result = run_child(["declare_int", "declare_forged", "eval"],
+                               stdin=inherited, stdout=inherited, stderr=inherited)
+        for fd in (0, 1, 2):
+            self.assertEqual(result["notes"]["declare%d" % fd],
+                             "BootRefused:declaration_refused")
+        self.assertEqual(result["notes"]["declare_forged"], "BootRefused:declaration_refused")
+        report = result["stages"][-1]
+        # nada foi concedido: os três slots herdados seguem desconhecidos
+        self.assertEqual(report["unknown_fds"], [0, 1, 2])
+        self.assertTrue(all(e["reason"] == "no_grant" for e in report["entries"]))
+        # controle positivo: a fábrica, que CRIA o FD, é reconhecida
+        control = run_child([*CLEAN_STD, "eval"], stdin=inherited_file(), stdout=inherited_file(),
+                            stderr=inherited_file())
+        self.assertEqual(control["stages"][-1]["verdict"], "CLEAN_FOR_GRANTS")
+
+    def test_registry_lifecycle_releases_anchors_and_invalidates_grants(self):
+        result = run_child([*CLEAN_STD, "pipe", "eval", "mark_base", "shutdown_registry",
+                            "diff:closed", "eval"])
+        self.assertEqual(result["stages"][0]["verdict"], "CLEAN_FOR_GRANTS")   # controle
+        # as 5 âncoras (3 slots + 2 pipes) foram liberadas; nenhum FD do chamador fechado
+        self.assertEqual(len(result["notes"]["closed"]["removed"]), 5)
+        self.assertEqual(result["notes"]["closed"]["added"], [])
+        self.assertEqual(result["notes"]["grants_after_close"], 0)
+        self.assertEqual(result["notes"]["place_after_close"], "BootRefused:registry_closed")
+        self.assertEqual(result["notes"]["pipe_after_close"], "BootRefused:registry_closed")
+        final_report = result["stages"][-1]
+        self.assertEqual((final_report["verdict"], final_report["reason"]),
+                         ("REFUSED", "registry_closed"))
+
+    def test_fd_number_reused_after_close_is_not_the_granted_object(self):
+        result = run_child([*CLEAN_STD, "pipe", "eval", "reuse_closed_pipe_read", "eval"])
+        r = result["pipes"][0][0]
+        self.assertEqual(result["stages"][0]["verdict"], "CLEAN_FOR_GRANTS")    # controle
+        report = result["stages"][-1]
+        self.assertEqual(report["unknown_fds"], [r])
+        mismatch = mismatch_of(report, r)
+        self.assertLessEqual({"identity", "ofd"}, mismatch)    # outro objeto, outra OFD
+
     def test_closed_stdio_and_vanished_grant_in_real_child(self):
         report = final(CLEAN_STD + ["close2"])
         self.assertEqual(report["std_closed"], [2])
@@ -557,7 +829,8 @@ class ChildProcessTests(unittest.TestCase):
         self.assertEqual(result["notes"], {
             **{k: v for k, v in result["notes"].items() if k.startswith("place")},
             "grants_setitem": "TypeError", "grants_assign": "AttributeError",
-            "new_attribute": "AttributeError", "grant_ctor": "TypeError",
+            "new_attribute": "AttributeError",
+            "grant_by_declaration": "BootRefused:declaration_refused",
             "grants_pop": "AttributeError"})
         self.assertEqual(result["stages"][-1]["verdict"], "CLEAN_FOR_GRANTS")
 
@@ -599,6 +872,49 @@ class ChildMixedTests(unittest.TestCase):
             # o slot que a chamada abriu foi devolvido fechado; nada foi concedido
             self.assertEqual(report["std_closed"], [slot])
             self.assertEqual(report["verdict"], "UNKNOWN_CAPABILITIES")
+
+    def test_failure_after_replacing_a_std_slot_leaves_no_grant_and_no_leak(self):
+        with tempfile.TemporaryFile() as inherited:
+            control = run_child(["mark_base", "devnull1", "diff:ok", "eval"], stdout=inherited)
+            self.assertEqual(control["notes"]["place1"], "ok")                  # controle
+            self.assertEqual(len(control["notes"]["ok"]["added"]), 1)           # só a âncora
+            # (a) slot ocupado por objeto herdado: dup2 já ocorreu quando a âncora falha
+            result = run_child(["mark_base", "fail_anchor", "devnull1", "restore_fcntl",
+                                "diff:fail", "eval"], stdout=inherited)
+        self.assertEqual(result["notes"]["place1"], "place_devnull_failed")
+        self.assertEqual(result["notes"]["fail"], {"added": [], "removed": []})  # sem vazamento
+        entry1 = next(e for e in result["stages"][-1]["entries"] if e["fd"] == 1)
+        # a autoridade herdada foi descartada; o slot é /dev/null herdável SEM grant
+        self.assertEqual((entry1["kind"], entry1["cloexec"], entry1["status"], entry1["reason"]),
+                         ("chr_devnull", False, "unknown", "no_grant"))
+        # (b) slot fechado cujo número é reutilizado: volta a ficar fechado
+        closed = run_child(["close1", "mark_base", "fail_anchor", "devnull1", "restore_fcntl",
+                            "diff:fail", "devnull0", "devnull2", "eval"])
+        self.assertEqual(closed["notes"]["place1"], "place_devnull_failed")
+        self.assertEqual(closed["notes"]["fail"], {"added": [], "removed": []})
+        self.assertEqual(closed["stages"][-1]["std_closed"], [1])
+
+    def test_make_pipe_is_all_or_nothing(self):
+        control = run_child([*CLEAN_STD, "mark_base", "pipe", "diff:ok", "eval"])
+        self.assertNotIn("pipe", control["notes"])                              # controle
+        self.assertEqual(len(control["notes"]["ok"]["added"]), 4)               # 2 FDs + 2 âncoras
+        for step in ("fail_anchor", "fail_anchor_second"):
+            result = run_child([*CLEAN_STD, "mark_base", step, "pipe", "restore_fcntl",
+                                "diff:fail", "eval"])
+            self.assertEqual(result["notes"]["pipe"], "make_pipe_failed", step)
+            self.assertEqual(result["notes"]["fail"], {"added": [], "removed": []}, step)
+            self.assertEqual(result["stages"][-1]["verdict"], "CLEAN_FOR_GRANTS", step)
+
+    def test_kcmp_unavailable_makes_every_grant_unknown_never_authorized(self):
+        control = final(CLEAN_STD)
+        self.assertEqual(control["verdict"], "CLEAN_FOR_GRANTS")                # controle
+        report = final([*CLEAN_STD, "kcmp_unavailable"])
+        self.assertEqual(report["verdict"], "UNKNOWN_CAPABILITIES")
+        for fd in (0, 1, 2):
+            self.assertEqual(report["entries"][fd]["status"], "unknown")
+            self.assertEqual(mismatch_of(report, fd), {"ofd_unverifiable"})
+        self.assertFalse([e for e in report["entries"] if e["status"] == "authorized"
+                          and e["reason"] != "registry_anchor"])
 
     def test_truncated_listing_omitting_a_real_fd_is_not_accepted(self):
         base = [*CLEAN_STD, "pipe"]
