@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
-"""Testes de trusted_root: identidade de raiz sintética (GH-F1.18/PR-B).
-
-Duas classes distintas:
-- KernelTests: chamam openat2/statx REAIS do kernel sobre fixtures em /tmp.
-  Um skipTest por syscall indisponível NÃO é evidência positiva.
-- MockTests: provam a lógica do programa com falhas injetadas; não provam o
-  comportamento do kernel.
-Nenhum mount, namespace, sudo ou caminho real é usado.
-"""
+import contextlib
 import ctypes
+import dataclasses as dc
 import errno
+import io
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -195,22 +190,10 @@ class KernelTests(FixtureCase):
         os.mkdir(self.path(bare))  # prefixo certo, sem marcador
         self.refused("not_synthetic", T.open_synthetic_root, self.anchor, bare)
 
-    def test_cli_is_closed_and_never_exits_zero(self):
-        proc = subprocess.run([sys.executable, os.path.join(HERE, "trusted_root.py"),
-                               "--synthetic-only", "--json"],
-                              capture_output=True, text=True, timeout=30)
-        self.assertEqual(proc.returncode, 2)
-        report = json.loads(proc.stdout)
-        self.assertEqual(report["strong"], "UNAVAILABLE")
-        self.assertIs(report["agent_execution_authorized"], False)
-        self.assertIn(report["result"], ("IDENTITY_OBSERVED_NOT_AUTHORIZED", "REFUSED"))
-        bad = subprocess.run([sys.executable, os.path.join(HERE, "trusted_root.py"),
-                              "/etc"], capture_output=True, text=True, timeout=30)
-        self.assertEqual(bad.returncode, 64)
 
 
-class MockTests(FixtureCase):
-    """Falhas injetadas: a lógica do programa, não o kernel."""
+class MixedTests(FixtureCase):
+    """Preparação real + falha injetada: prova a lógica, não o kernel."""
 
     def real_statx(self, fd, mask):
         return T._sys_statx(fd, mask)
@@ -311,10 +294,184 @@ class MockTests(FixtureCase):
         with mock.patch.object(T.sys, "platform", "win32"):
             self.refused("unsupported_platform", T.observe, fd)
 
+
+
+class CliSubprocessTests(unittest.TestCase):
+    """A CLI real em subprocesso, sem mocks."""
+
+    script = os.path.join(HERE, "trusted_root.py")
+
+    def run_cli(self, *args, env=None):
+        return subprocess.run([sys.executable, self.script, *args],
+                              capture_output=True, text=True, timeout=60, env=env)
+
+    def test_cli_is_closed_and_never_exits_zero(self):
+        proc = self.run_cli("--synthetic-only", "--json")
+        self.assertEqual(proc.returncode, 2)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["strong"], "UNAVAILABLE")
+        self.assertIs(report["agent_execution_authorized"], False)
+        self.assertIn(report["result"], ("IDENTITY_OBSERVED_NOT_AUTHORIZED", "REFUSED"))
+        self.assertEqual(report["cleanup_failures"], [])
+        self.assertEqual(self.run_cli("/etc").returncode, 64)
+        self.assertEqual(self.run_cli("--synthetic-only", "--extra").returncode, 64)
+
+    def test_real_fd_exhaustion_is_sanitized_exit_2(self):
+        iso = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-iso-"))
+        self.addCleanup(shutil.rmtree, iso, ignore_errors=True)
+        code = ("import sys, json, resource\nsys.path.insert(0, %r)\n"
+                "import trusted_root as T\n"
+                "resource.setrlimit(resource.RLIMIT_NOFILE, (3, 3))\n"
+                "sys.exit(T.main(['--synthetic-only', '--json']))\n" % HERE)
+        proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True,
+                              text=True, timeout=60, env={"TMPDIR": iso})
+        self.assertEqual(proc.returncode, 2)
+        report = json.loads(proc.stdout)
+        self.assertEqual(report["result"], "REFUSED")
+        # mkdtemp sem fd falha como ENOENT ("sem diretório temporário utilizável")
+        self.assertIn(report["reason"], ("infrastructure_EMFILE", "infrastructure_ENOENT"))
+        # o resíduo, se houver, é declarado e não escondido
+        leftovers = os.listdir(iso)
+        self.assertEqual(bool(leftovers), "fixture_remove" in report["cleanup_failures"])
+        for text in (proc.stdout, proc.stderr):
+            self.assertNotIn(iso, text)
+            self.assertNotIn("Traceback", text)
+        control = subprocess.run([sys.executable, self.script, "--synthetic-only"],
+                                 capture_output=True, text=True, timeout=60,
+                                 env={"TMPDIR": iso})  # controle positivo, mesmo TMPDIR
+        self.assertEqual((control.returncode, control.stdout.strip()),
+                         (2, "IDENTITY_OBSERVED_NOT_AUTHORIZED"))
+
+class CliFaultInjectionTests(unittest.TestCase):
+    """_run_synthetic/main com falhas injetadas; controle positivo real."""
+
+    def setUp(self):
+        self.iso = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-iso-"))
+        self.addCleanup(shutil.rmtree, self.iso, ignore_errors=True)
+        patcher = mock.patch.object(tempfile, "tempdir", self.iso)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        before = open_fds()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = T.main(list(args) or ["--synthetic-only", "--json"])
+        return rc, out.getvalue(), err.getvalue(), before
+
+    def assert_sanitized(self, out, err, secret=None):
+        for text in (out, err):
+            self.assertNotIn("Traceback", text)
+            self.assertNotIn(self.iso, text)
+            if secret:
+                self.assertNotIn(secret, text)
+
+    def assert_refused(self, reason, *, leaked_dir=False, **kw):
+        rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(rc, 2)
+        self.assertEqual((report["result"], report["reason"]), ("REFUSED", reason))
+        self.assertIs(report["agent_execution_authorized"], False)
+        self.assert_sanitized(out, err, kw.get("secret"))
+        self.assertEqual(open_fds(), before)
+        self.assertEqual(bool(os.listdir(self.iso)), leaked_dir)
+        return report
+
+    def test_positive_control_leaves_no_descriptors_or_directories(self):
+        rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["result"], "IDENTITY_OBSERVED_NOT_AUTHORIZED")
+        self.assertEqual(report["cleanup_failures"], [])
+        self.assertEqual(open_fds(), before)
+        self.assertEqual(os.listdir(self.iso), [])
+
+    def test_fixture_creation_failure(self):
+        with mock.patch.object(T, "make_synthetic_fixture",
+                               side_effect=OSError(errno.ENOSPC, "/secret/path")):
+            self.assert_refused("infrastructure_ENOSPC", secret="/secret/path")
+
+    def test_partial_fixture_is_removed_when_mkdir_fails(self):
+        with mock.patch.object(T.os, "mkdir", side_effect=OSError(errno.EACCES, "x")):
+            self.assert_refused("infrastructure_EACCES")  # nenhum diretório sobrou
+
+    def test_open_anchor_failure(self):
+        with mock.patch.object(T, "open_anchor", side_effect=OSError(errno.EMFILE, "x")):
+            self.assert_refused("infrastructure_EMFILE")
+
+    def test_kernel_call_failures_are_sanitized(self):
+        with mock.patch.object(T, "_sys_openat2", side_effect=OSError(errno.EPERM, "/p")):
+            self.assert_refused("syscall_unavailable", secret="/p")
+        with mock.patch.object(T, "_sys_statx", side_effect=OSError(errno.ENOSYS, "/p")):
+            self.assert_refused("syscall_unavailable", secret="/p")
+
+    def test_refusal_codes_pass_through(self):
+        with mock.patch.object(T, "open_synthetic_root", side_effect=T.RootRefused("xdev_refused")):
+            self.assert_refused("xdev_refused")
+
+    def test_unexpected_exceptions_do_not_leak_details(self):
+        with mock.patch.object(T, "observe", side_effect=RuntimeError("/secret/path boom")):
+            self.assert_refused("unexpected_failure", secret="/secret/path")
+        with mock.patch.object(T, "open_synthetic_root", side_effect=KeyError("/secret/path")):
+            self.assert_refused("unexpected_failure", secret="/secret/path")
+
+    def test_anchor_close_failure_is_reported_not_swallowed(self):
+        real_open_anchor, real_close, seen = T.open_anchor, os.close, {}
+
+        def tracking_open_anchor(path):
+            seen["fd"] = real_open_anchor(path)
+            return seen["fd"]
+
+        def failing_close(fd):
+            real_close(fd)  # libera de verdade; só a notificação de erro é simulada
+            if fd == seen.get("fd") and not seen.get("raised"):
+                seen["raised"] = True
+                raise OSError(errno.EIO, "/secret/path")
+        with mock.patch.object(T, "open_anchor", side_effect=tracking_open_anchor), \
+                mock.patch.object(T.os, "close", side_effect=failing_close):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["cleanup_failures"], ["anchor_close"])
+        self.assertEqual(report["result"], "IDENTITY_OBSERVED_NOT_AUTHORIZED")
+        self.assert_sanitized(out, err, "/secret/path")
+        self.assertEqual(open_fds(), before)
+
+    def test_fixture_removal_failure_is_reported_not_swallowed(self):
+        with mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "/secret")):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        self.assertEqual(rc, 2)
+        self.assertEqual(report["cleanup_failures"], ["fixture_remove"])
+        self.assert_sanitized(out, err, "/secret")
+        self.assertEqual(len(os.listdir(self.iso)), 1)  # o resíduo é declarado, não escondido
+
+    def test_text_mode_reports_cleanup_failures(self):
+        with mock.patch.object(T.shutil, "rmtree", side_effect=OSError(errno.EBUSY, "x")):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = T.main(["--synthetic-only"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.getvalue().strip(),
+                         "IDENTITY_OBSERVED_NOT_AUTHORIZED; cleanup_failures=fixture_remove")
+
+    def test_invalid_usage_is_64(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(T.main([]), 64)
+            self.assertEqual(T.main(["--json"]), 64)
+
+
+class PureMockTests(unittest.TestCase):
+    """Sem syscalls: apenas lógica."""
+
+    def refused(self, code, fn, *args):
+        with self.assertRaises(T.RootRefused) as caught:
+            fn(*args)
+        self.assertEqual(caught.exception.code, code)
+
     def test_compare_rules(self):
         base = T.RootIdentity(1, 2, 3, "unique", "mnt:[1]", 0x1100)
         T.compare(base, base)
-        import dataclasses as dc
         for change, code in (({"mnt_id_variant": "legacy"}, "variant_not_comparable"),
                              ({"mnt_ns": "mnt:[2]"}, "mount_namespace_changed"),
                              ({"mnt_ns": None}, "mount_namespace_unknown"),
@@ -326,12 +483,41 @@ class MockTests(FixtureCase):
         self.refused("invalid_identity", T.compare, base, {"dev": 1})
         self.refused("invalid_identity", T.compare, None, base)
 
-    def test_invariants_are_constants(self):
-        self.assertEqual(T.INVARIANTS, {
+    def test_invariants_are_read_only_constants(self):
+        self.assertEqual(dict(T.INVARIANTS), {
             "strong": "UNAVAILABLE", "readiness": "BLOCKED",
             "agent_execution_authorized": False, "file_operations_authorized": False,
             "cloud_call_authorized": False, "data_transfer_authorized": False})
+        with self.assertRaises(TypeError):
+            T.INVARIANTS["strong"] = "STRONG"
+        with self.assertRaises(TypeError):
+            T.INVARIANTS["agent_execution_authorized"] = True
         self.assertEqual(platform.system(), "Linux")
+
+    def test_check_report_rejects_tampered_or_mistyped_reports(self):
+        good = {**T.INVARIANTS, "result": "x"}
+        T.check_report(good)
+        for key, value in (("agent_execution_authorized", True),
+                           ("agent_execution_authorized", 0),
+                           ("file_operations_authorized", "false"),
+                           ("cloud_call_authorized", None),
+                           ("data_transfer_authorized", 1),
+                           ("strong", "STRONG"), ("readiness", "READY"),
+                           ("owner_authenticated", True), ("bootstrap_trusted", True)):
+            with self.assertRaises(ValueError, msg=(key, value)):
+                T.check_report({**good, key: value})
+        for junk in (None, [], "x", {"strong": "UNAVAILABLE"}):
+            with self.assertRaises(ValueError):
+                T.check_report(junk)
+
+    def test_describe_and_refused_reports_keep_the_invariants(self):
+        refused = T._refused_report("whatever", ["b", "a"])
+        self.assertEqual(refused["cleanup_failures"], ["a", "b"])
+        self.assertEqual(refused["strong"], "UNAVAILABLE")
+        ident = T.RootIdentity(1, 2, 3, "unique", "mnt:[1]", 0x1100)
+        report = T.OpenedRoot(None, ident).describe()
+        self.assertIs(report["owner_authenticated"], False)
+        self.assertEqual(report["identity_scope"], "comparison_only")
 
 
 if __name__ == "__main__":

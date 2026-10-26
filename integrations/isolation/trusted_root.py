@@ -20,20 +20,41 @@ import shutil
 import stat
 import sys
 import tempfile
+import types
 
 SYNTHETIC_PREFIX = "gh-f1-18-synthetic-"
 MARKER_NAME = ".gh-f1-18-synthetic"
 MARKER_CONTENT = b"SYNTHETIC-ROOT-GH-F1-18\n"
 
-# Invariantes herdadas; nenhum resultado deste módulo as altera.
-INVARIANTS = {
+# Invariantes herdadas; nenhum resultado deste módulo as altera. A visão é
+# somente leitura (protege contra atribuição acidental, não contra um processo
+# Python comprometido, que está fora da garantia).
+INVARIANTS = types.MappingProxyType({
     "strong": "UNAVAILABLE",
     "readiness": "BLOCKED",
     "agent_execution_authorized": False,
     "file_operations_authorized": False,
     "cloud_call_authorized": False,
     "data_transfer_authorized": False,
-}
+})
+_NEVER_TRUE = ("bootstrap_trusted", "bootstrap_complete", "owner_authenticated",
+               "owner_grant_implemented", "aba_protection_proven",
+               "external_writers_excluded", "anchor_provenance_verified")
+
+
+def check_report(report):
+    """Recusa (ValueError) um relatório cujas invariantes não sejam exatamente
+    as constantes, com tipos exatos. Não é prova contra processo comprometido."""
+    if type(report) is not dict:
+        raise ValueError("report_not_dict")
+    for key, value in INVARIANTS.items():
+        if key not in report or type(report[key]) is not type(value) \
+                or report[key] != value:
+            raise ValueError("invariant_violated")
+    for key in _NEVER_TRUE:
+        if key in report and report[key] is not False:
+            raise ValueError("invariant_violated")
+    return report
 
 # UAPI Linux: x86_64 e arm64/aarch64; outras arquiteturas recusadas.
 _NR_OPENAT2 = 437
@@ -311,7 +332,7 @@ class OpenedRoot:
 
     def describe(self):
         ident = dataclasses.asdict(self.identity)
-        return {"schema": "trusted-root-diagnostic/1", **INVARIANTS,
+        return check_report({"schema": "trusted-root-diagnostic/1", **INVARIANTS,
                 "identity": ident,
                 "identity_scope": "comparison_only",
                 "synthetic_only": True,
@@ -319,7 +340,7 @@ class OpenedRoot:
                 "owner_authenticated": False,
                 "aba_protection_proven": False,
                 "external_writers_excluded": False,
-                "anchor_provenance_verified": False}
+                "anchor_provenance_verified": False})
 
 
 def _verify_marker(root_fd):
@@ -365,9 +386,13 @@ def make_synthetic_fixture():
     parent = os.path.realpath(tempfile.mkdtemp(prefix="gh-f1-18-fixture-"))
     name = SYNTHETIC_PREFIX + "root"
     root = os.path.join(parent, name)
-    os.mkdir(root, 0o700)
-    with open(os.path.join(root, MARKER_NAME), "wb") as marker:
-        marker.write(MARKER_CONTENT)
+    try:
+        os.mkdir(root, 0o700)
+        with open(os.path.join(root, MARKER_NAME), "wb") as marker:
+            marker.write(MARKER_CONTENT)
+    except BaseException:
+        shutil.rmtree(parent, ignore_errors=True)  # não deixa fixture parcial
+        raise
     return parent, name
 
 
@@ -376,27 +401,64 @@ def open_anchor(parent):
     return os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
 
 
+def _refused_report(reason, cleanup_failures=()):
+    return check_report({"schema": "trusted-root-diagnostic/1", **INVARIANTS,
+                         "result": "REFUSED", "reason": reason,
+                         "synthetic_only": True,
+                         "cleanup_failures": sorted(cleanup_failures)})
+
+
+def _run_synthetic():
+    """Cria, abre, descreve e limpa a fixture. Nunca levanta: qualquer falha vira
+    relatório REFUSED com códigos sanitizados (sem caminhos nem tracebacks)."""
+    failures = []
+    report = None
+    parent = anchor = None
+    try:
+        parent, name = make_synthetic_fixture()
+        anchor = open_anchor(parent)
+        with open_synthetic_root(anchor, name) as root:
+            report = root.describe()
+            report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
+    except RootRefused as refused:
+        report = _refused_report(refused.code)
+    except OSError as e:
+        report = _refused_report("infrastructure_" + errno.errorcode.get(e.errno, "error"))
+    except Exception:
+        report = _refused_report("unexpected_failure")
+    if anchor is not None:
+        try:
+            os.close(anchor)
+        except OSError:
+            failures.append("anchor_close")
+    if parent is not None:
+        try:
+            shutil.rmtree(parent)
+        except OSError:
+            pass
+        if os.path.lexists(parent):
+            failures.append("fixture_remove")
+    if failures:
+        report = dict(report)
+        report["cleanup_failures"] = sorted(failures)
+    else:
+        report.setdefault("cleanup_failures", [])
+    return check_report(report)
+
+
 def main(argv):
     import json
     if list(argv) not in (["--synthetic-only"], ["--synthetic-only", "--json"]):
         print("uso: trusted_root.py --synthetic-only [--json]", file=sys.stderr)
         return 64
-    parent, name = make_synthetic_fixture()
-    anchor = open_anchor(parent)
-    try:
-        try:
-            with open_synthetic_root(anchor, name) as root:
-                report = root.describe()
-                report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
-        except RootRefused as refused:
-            report = {"schema": "trusted-root-diagnostic/1", **INVARIANTS,
-                      "result": "REFUSED", "reason": refused.code,
-                      "synthetic_only": True}
-    finally:
-        os.close(anchor)
-        shutil.rmtree(parent, ignore_errors=True)
-    print(json.dumps(report, indent=2, sort_keys=True) if "--json" in argv
-          else report["result"])
+    report = _run_synthetic()
+    if "--json" in argv:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        suffix = ("; cleanup_failures=" + ",".join(report["cleanup_failures"])
+                  if report["cleanup_failures"] else "")
+        print(report["result"] + (":" + report["reason"] if "reason" in report else "")
+              + suffix)
     return 2  # nunca 0: o diagnóstico não autoriza nada
 
 
