@@ -432,6 +432,44 @@ class PureLogicTests(unittest.TestCase):
         for junk in (None, [], "x", {}):
             self.refused("inventory_malformed", junk)
 
+    def test_caller_supplied_targets_are_refused_unless_in_the_closed_format(self):
+        def with_target(target):
+            return inventory(entry(0), entry(1), entry(2),
+                             entry(7, "fifo", 1, 2, True, 0, target, access="rdonly"))
+        reg = std_registry()
+        # controles positivos: alvos legítimos e previamente sanitizados
+        for good in ("pipe:[12345]", "socket:[9]", "anon_inode:[eventpoll]",
+                     "anon_inode:inotify", "/dev/null", "<tty>", "<redacted-path>"):
+            report = ev(with_target(good), reg)
+            self.assertEqual(report["entries"][3]["target"], good)
+            self.assertEqual(report["inventory_provenance"], "caller_supplied_unverified")
+        # negativos: nada fornecido pelo chamador é reproduzido no relatório
+        personal = "/home/fictional-user/Documents/segredo.txt"
+        for bad in ("/private/path", "pipe:/private/path", "socket:/private/path",
+                    "anon_inode:/private/path", personal, "pipe:" + personal,
+                    "pipe:[1]/x", "pipe:[abc]", "pipe:[]", "pipe:[" + "9" * 30 + "]",
+                    "pipe:[1]\n", "pipe:[1]\x00", "anon_inode:[a/b]",
+                    "anon_inode:" + "x" * 40, "<tty>/x", " /dev/null", "/dev/nullx", ""):
+            with self.assertRaises(B.BootRefused, msg=bad) as caught:
+                ev(with_target(bad), reg)
+            self.assertEqual(caught.exception.code, "inventory_target_invalid")
+            self.assertEqual(B._diagnose(reg, lambda bad=bad: with_target(bad))["reason"],
+                             "inventory_target_invalid")
+        for wrong_type in (None, 7, b"/dev/null", ["/dev/null"]):
+            self.refused("inventory_malformed", with_target(wrong_type))
+        # o texto recusado nunca aparece no relatório de recusa
+        refused = B._diagnose(reg, lambda: with_target("pipe:" + personal))
+        self.assertNotIn("fictional-user", json.dumps(refused))
+
+    def test_real_target_sanitizer_only_returns_the_closed_format(self):
+        for raw, expected in (("/dev/null", "/dev/null"), ("pipe:[7]", "pipe:[7]"),
+                              ("anon_inode:[eventpoll]", "anon_inode:[eventpoll]"),
+                              ("/dev/pts/3", "<tty>"), ("/home/x/file", "<redacted-path>"),
+                              ("pipe:/home/x", "<redacted-path>"),
+                              ("anon_inode:" + "y" * 50, "<redacted-path>")):
+            self.assertEqual(B._safe_target(raw), expected)
+            self.assertTrue(B._SAFE_TARGET.match(B._safe_target(raw)))
+
     def test_validated_inventory_still_has_no_provenance(self):
         report = B.evaluate(std_inventory(), std_registry())
         self.assertEqual(report["inventory_provenance"], "caller_supplied_unverified")

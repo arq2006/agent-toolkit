@@ -26,6 +26,7 @@ import errno
 import fcntl
 import os
 import platform
+import re
 import resource
 import stat
 import sys
@@ -47,6 +48,12 @@ _ACCESS = {os.O_RDONLY: "rdonly", os.O_WRONLY: "wronly", os.O_RDWR: "rdwr"}
 _VERDICTS = ("CLEAN_FOR_GRANTS", "UNKNOWN_CAPABILITIES", "REFUSED")
 _PROVENANCE = ("none", "collected_in_process", "caller_supplied_unverified")
 _MAX_PROBE = 1 << 20
+# Único formato de `target` aceito num relatório: valores que _safe_target() produz.
+# Nada que o chamador escreva (caminhos, "pipe:/x", quebras de linha) é reproduzido.
+_SAFE_TARGET = re.compile(
+    r"(?:/dev/null|<tty>|<redacted-path>"
+    r"|(?:pipe|socket):\[[0-9]{1,20}\]"
+    r"|anon_inode:\[?[A-Za-z0-9_-]{1,32}\]?)\Z")
 _NR_KCMP = {"x86_64": 312, "amd64": 312, "aarch64": 272, "arm64": 272}
 _KCMP_FILE = 0
 
@@ -143,9 +150,10 @@ def _kind_of(st, fd, target):
 
 
 def _safe_target(target):
-    """Mantém só alvos não pessoais; caminhos de arquivo são redigidos."""
-    if target.startswith(("pipe:", "socket:", "anon_inode:")) or target == "/dev/null":
-        return target[:64]
+    """Só devolve alvos que casam com o formato fechado _SAFE_TARGET; caminhos de
+    arquivo e qualquer outra coisa viram "<redacted-path>"."""
+    if _SAFE_TARGET.match(target):
+        return target
     if target.startswith(("/dev/pts/", "/dev/tty")):
         return "<tty>"
     return "<redacted-path>"
@@ -464,6 +472,10 @@ def _validate_inventory(inv):
         if entry["kind"] not in KINDS or type(entry["access"]) is not str \
                 or type(entry["target"]) is not str:
             raise BootRefused("inventory_malformed")
+        # Regra de recusa (não de reescrita): o alvo vira texto de relatório, então
+        # só o formato fechado de _safe_target() passa; "pipe:/private" também não.
+        if not _SAFE_TARGET.match(entry["target"]):
+            raise BootRefused("inventory_target_invalid")
         if entry["fd"] <= previous:   # duplicata ou fora de ordem
             raise BootRefused("inventory_malformed")
         previous = entry["fd"]

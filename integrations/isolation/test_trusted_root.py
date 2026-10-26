@@ -276,6 +276,7 @@ class MixedTests(FixtureCase):
         for err, code in ((errno.EXDEV, "xdev_refused"),       # mountpoint simulado
                           (errno.ELOOP, "symlink_refused"),
                           (errno.ENOENT, "root_missing"),
+                          (errno.EAGAIN, "resolution_race"),
                           (errno.EPERM, "syscall_unavailable"),
                           (errno.ENOSYS, "syscall_unavailable"),
                           (errno.EIO, "open_failed")):
@@ -283,6 +284,36 @@ class MixedTests(FixtureCase):
                 self.refused(code, self.open_root)
         with self.open_root():
             pass  # controle positivo
+
+    def test_eagain_is_a_fail_closed_resolution_race_without_retry(self):
+        with self.open_root():
+            pass  # controle positivo: resolução normal
+        calls = []
+
+        def racing(dirfd, name, flags):
+            calls.append(name)
+            raise OSError(errno.EAGAIN, "x")
+        before = open_fds()
+        with mock.patch.object(T, "_sys_openat2", side_effect=racing):
+            self.refused("resolution_race", self.open_root)
+            self.refused("resolution_race", T._open_dir, self.anchor, self.name)
+        self.assertEqual(len(calls), 2)            # uma chamada por tentativa: sem retry
+        self.assertEqual(open_fds(), before)       # nenhum FD concedido
+        self.assertEqual(T._OPEN_ERRORS[errno.EAGAIN], "resolution_race")
+        self.assertEqual(T._RESOLVE_ALL, T._RESOLVE_NO_XDEV | T._RESOLVE_NO_MAGICLINKS
+                         | T._RESOLVE_NO_SYMLINKS | T._RESOLVE_BENEATH)  # flags intactas
+        with mock.patch.object(T, "_sys_openat2", side_effect=racing):
+            rc, out, err, _ = self._cli_report()
+        self.assertEqual(rc, 2)
+        report = json.loads(out)
+        self.assertEqual((report["result"], report["reason"]), ("REFUSED", "resolution_race"))
+        self.assertIs(report["file_operations_authorized"], False)
+
+    def _cli_report(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = T.main(["--synthetic-only", "--json"])
+        return rc, out.getvalue(), err.getvalue(), None
 
     def test_unsupported_platform(self):
         with mock.patch.object(T.sys, "platform", "darwin"):

@@ -201,6 +201,7 @@ _OPEN_ERRORS = {
     errno.ENOTDIR: "not_directory",
     errno.EBADF: "invalid_anchor",
     errno.EACCES: "access_denied",
+    errno.EAGAIN: "resolution_race",   # fail-closed: sem retry, flags inalteradas
     errno.ENOSYS: "syscall_unavailable",
     errno.EPERM: "syscall_unavailable",
     errno.EINVAL: "syscall_unavailable",

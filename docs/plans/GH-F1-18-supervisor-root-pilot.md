@@ -24,7 +24,7 @@ Nenhum módulo histórico, política, doctor, readiness ou gate foi alterado.
 
 **`supervisor_boot`**:
 - `collect_inventory()`: lê `/proc/self/fd` em processo monothread (`close_range` **não** é usado) e **confronta a listagem com uma sondagem independente** (`fcntl(F_GETFD)` em `0..RLIMIT_NOFILE`, recusada acima de 2^20): FD sondado ausente da listagem, ou mais de um número listado que não existe mais (o da própria listagem), ou descrição instável entre duas leituras, tornam o inventário inconsistente. Identidade do procfs: `readlink /proc/self` e `/proc/self/stat` precisam coincidir com o pid. Um FD sentinela `/dev/null` aberto na coleta deve reaparecer com a identidade esperada. Uma segunda listagem precisa coincidir com a primeira dentro do intervalo sondado. Alvos que são caminhos de arquivo são redigidos.
-- **Validação semântica do inventário** (`_validate_inventory`): além dos tipos, exige `probe_range` em [3, 2^20], FDs estritamente crescentes (sem duplicata) e dentro do intervalo sondado, `access` e `opath` coerentes com `flags`, `transient == 1` quando `probe_agrees`, e `sentinel_verified` quando `structurally_consistent`. Combinações contraditórias → `inventory_contradictory`; sucesso não declarado → `inventory_inconsistent`; forma inválida → `inventory_malformed`. **Passar nessa validação não dá proveniência**: um dicionário recebido de fora continua dado não confiável; o relatório registra `inventory_provenance` (`collected_in_process`, `caller_supplied_unverified` ou `none`).
+- **Validação semântica do inventário** (`_validate_inventory`): além dos tipos, exige `probe_range` em [3, 2^20], FDs estritamente crescentes (sem duplicata) e dentro do intervalo sondado, `access` e `opath` coerentes com `flags`, `transient == 1` quando `probe_agrees`, e `sentinel_verified` quando `structurally_consistent`. Combinações contraditórias → `inventory_contradictory`; sucesso não declarado → `inventory_inconsistent`; forma inválida → `inventory_malformed`. `target` é validado por **recusa** contra um formato fechado (`/dev/null`, `<tty>`, `<redacted-path>`, `pipe:[N]`, `socket:[N]`, `anon_inode:[nome]`); qualquer outra coisa — inclusive caminhos e `pipe:/caminho` — dá `inventory_target_invalid` e o texto recusado nunca é reproduzido no relatório. A coleta real usa o mesmo formato (`_safe_target` redige o que não casa). **Passar nessa validação não dá proveniência**: um dicionário recebido de fora continua dado não confiável; o relatório registra `inventory_provenance` (`collected_in_process`, `caller_supplied_unverified` ou `none`).
 - **Três conceitos distintos.** (1) *Inventário estruturalmente consistente*: listagem, sondagem e metadados concordam nesta observação (`inventory_structurally_consistent`). (2) *Inventário efetivamente completo*: **não comprovável** (corridas, `/proc` adulterado de forma coerente com a sondagem); o relatório afirma sempre `inventory_effectively_complete=false`. (3) *Ausência de capacidades não observadas*: **não comprovada**; `unobserved_capabilities_excluded=false`. `CLEAN_FOR_GRANTS` significa apenas "nenhum FD observado é desconhecido".
 - `CapabilityRegistry`: **não há API de declaração.** Não existe método que aceite um FD já existente: `place_devnull(0|1|2)` e `make_pipe()` criam o FD, ancoram e só então emitem o grant (`_issue` recusa tudo que não seja um recibo criado por essas fábricas — inclusive um `int`, um `Grant` montado à mão ou um recibo forjado: `declaration_refused`). `grants` é uma visão somente leitura, a classe usa `__slots__`, a avaliação aceita apenas o tipo exato `CapabilityRegistry`, só confia em grants que **este** registro emitiu e revalida cada um (tipos, `kind`, âncoras distintas). `_MINT`, `_mint_grant`, `_registry_with` e `_record` **não existem** no módulo de produção; os testes puros montam registros sintéticos com um helper local que escreve no estado privado (o que código no mesmo processo sempre poderia fazer). **Limite explícito:** isto fecha o caminho de concessão por declaração da interface operacional; não é fronteira contra código Python arbitrário no mesmo processo (A3, fora da garantia).
 - **Ciclo de vida do registro.** `close()` (idempotente; também como gerenciador de contexto) fecha as âncoras privadas, esvazia os grants e invalida o registro: a avaliação recusa `registry_closed` e as fábricas também. Os FDs entregues ao chamador (pipes, slots 0-2) não são fechados. `make_pipe` é tudo-ou-nada (qualquer falha fecha os dois FDs e as âncoras e não emite grant). Se `place_devnull` falhar depois do `dup2`, o slot permanece como `/dev/null` herdável **sem grant** (a autoridade herdada anterior já foi descartada e não é restaurável); se o slot estava fechado e foi reutilizado, volta a ficar fechado. Nenhum caminho deixa FD vazado. Número de FD reutilizado após `close` é detectado por identidade/OFD.
@@ -52,6 +52,7 @@ Tupla `(dev, ino, mnt_id, variante, mnt_ns)` observada no FD já aberto. Serve *
 - Os campos de um `statx` e as três chamadas de `observe` não são atômicos; divergência visível é detectada, a corrida não é eliminada.
 - `stx_dev_*` não tem bit; a coerência com `fstat` é verificada e a divergência recusa.
 - IDs únicos e legados de montagem não são comparáveis entre si; o escopo por mount namespace não está documentado e o link de `/proc/self/ns/mnt` é só contexto.
+- `EAGAIN` do `openat2` (corrida de resolução; o man documenta o retorno quando a resolução não pôde ser concluída com segurança) vira `resolution_race`, distinto de `open_failed`: é recusa fail-closed, **sem retry** e com as flags de resolução inalteradas; nenhum FD é concedido e a CLI sai com 2.
 - Arquiteturas: x86_64 e arm64; outras são recusadas. Falta de syscall (ENOSYS/EPERM/EINVAL) recusa, sem fallback.
 
 ## Casos de recusa cobertos
@@ -66,9 +67,9 @@ A classificação é **por classe de teste**; cada teste está em exatamente uma
 |---|---|---|---|---|
 | Kernel/sistema de arquivos reais, no processo, sem mocks (`KernelTests`, `CleanupRealTests`) | 15 | 0 | 15 | openat2/statx reais e remoção segura de fixtures |
 | Subprocesso real, sem mocks (`CliSubprocessTests`, `ChildProcessTests`) | 2 | 15 | 17 | `/proc/self/fd`, fcntl, kcmp, fábricas e CLI em filhos descartáveis |
-| Misto: real + falha injetada (`MixedTests`, `CliFaultInjectionTests`, `ChildMixedTests`) | 24 | 6 | 30 | lógica do programa sob falha; não o kernel |
-| Lógica pura / dados sintéticos (`PureMockTests`, `PureLogicTests`) | 6 | 26 | 32 | lógica do programa |
-| **Total novo** | **47** | **47** | **94** | |
+| Misto: real + falha injetada (`MixedTests`, `CliFaultInjectionTests`, `ChildMixedTests`) | 25 | 6 | 31 | lógica do programa sob falha; não o kernel |
+| Lógica pura / dados sintéticos (`PureMockTests`, `PureLogicTests`) | 6 | 28 | 34 | lógica do programa |
+| **Total novo** | **48** | **49** | **97** | |
 
 Os testes que alteram FDs (dup2, close, pipes, herança) rodam **apenas** em subprocessos `python -I` descartáveis; o processo do operador e o terminal nunca são alterados. Timeout ou saída malformada do filho falha o teste. Um `skip` por syscall indisponível (ex.: `kcmp`) não é evidência positiva.
 
@@ -76,10 +77,10 @@ Os testes que alteram FDs (dup2, close, pipes, herança) rodam **apenas** em sub
 
 | Ambiente | Execução | Resultado |
 |---|---|---|
-| Container do desenvolvimento (Linux 6.18, Python 3.13, x86_64) | 94 testes novos; suíte `integrations/isolation` 455 (361 anteriores + 94); `tests/` 188; skips: 0 | todos OK |
+| Container do desenvolvimento (Linux 6.18, Python 3.13, x86_64) | 97 testes novos; suíte `integrations/isolation` 458 (361 anteriores + 97); `tests/` 188; skips: 0 | todos OK |
 | Arch Linux do proprietário (ext4, kernel 7.2.4), informado por Arthur, **no HEAD `669846e`** | 431 testes de isolamento, 188 gerais, as duas CLIs `--synthetic-only` | OK; CLIs com código 2 e todas as autorizações `false`. **Anterior às correções desta rodada: precisa ser revalidado.** Não comprova isolamento operacional |
 
-Nenhum resultado do container é apresentado como execução no Arch. Os 94 testes do HEAD atual **ainda não foram executados no Arch**.
+Nenhum resultado do container é apresentado como execução no Arch. Os 97 testes do HEAD atual **ainda não foram executados no Arch**.
 
 O único teste de mountpoint real só **atravessa** `/proc` (já montado) e é recusado; nenhum mount foi criado.
 
@@ -118,9 +119,20 @@ Segunda auditoria Codex sobre o HEAD `669846e` (texto integral não disponível 
 - **Falhas parciais** (`fcntl(F_DUPFD_CLOEXEC)` falhando no filho): `place_devnull` deixa o slot como `/dev/null` herdável sem grant (ou fechado, se estava fechado) e `make_pipe` não deixa nada; em ambos o conjunto de FDs do filho é idêntico ao anterior.
 - **Mutações verificadas manualmente (testes falham):** aceitar `int` em `_issue`; remover a checagem de `opath`; remover `transient == 1`; trocar `inventory_effectively_complete` para `true`; remover a checagem de prefixo em `_remove_fixture`; ignorar a falha de limpeza da fixture parcial; (da rodada anterior) desligar `probe_agrees` e o `set_inheritable`.
 
+### Complemento da leitura integral da segunda auditoria
+
+Estes dois pontos só apareceram quando o relatório integral da segunda auditoria (HEAD `669846e`) foi lido; não constavam do resumo usado na rodada anterior.
+
+| Ponto | Problema | Correção | Evidência |
+|---|---|---|---|
+| P2-02 | `_validate_inventory()` aceitava `target="/private/path"` (só checava o tipo `str`); o caminho seguia `evaluate` → `_validate_inventory` → `_evaluate` → relatório | `target` só passa se casar com o formato fechado; valores iniciados por `pipe:`, `socket:` ou `anon_inode:` não são presumidos seguros; recusa `inventory_target_invalid` (sem reescrever); `inventory_provenance` continua `caller_supplied_unverified` | negativos: `/private/path`, `pipe:/private/path`, caminho pessoal fictício, `pipe:[1]/x`, `pipe:[abc]`, quebra de linha, NUL, 40 caracteres, vazio; tipos inválidos (`None`, `int`, `bytes`, `list`) ⇒ `inventory_malformed`; controles positivos: 7 alvos legítimos/sanitizados reproduzidos sem alteração |
+| P3-01 | `errno.EAGAIN` caía em `open_failed` | `_OPEN_ERRORS[EAGAIN] = "resolution_race"`; sem retry, flags de resolução inalteradas | falha injetada: `resolution_race`, uma chamada por tentativa, nenhum FD novo, CLI com `file_operations_authorized=false` e saída 2; controle de resolução normal preservado |
+
+Mutações verificadas: remover o mapeamento de `EAGAIN` e desligar a checagem de `target` fazem os testes falharem.
+
 ## Resultados não verificados
 
-Execução dos 94 testes no Arch/ext4/kernel 7.2.4, completude real de inventário (impossível de provar), `kcmp` bloqueado por seccomp/sandbox (resulta em `unknown`), raiz sob mount real do projeto, bind mounts, namespace diferente, `STATX_MNT_ID_UNIQUE` em kernel < 6.8 (caminho `legacy` só exercitado com mock), WSL2, macOS, comportamento no kernel 7.2.4/ext4 do proprietário, execução em terminal interativo real, SRT com FDs preexistentes.
+Execução dos 97 testes no Arch/ext4/kernel 7.2.4, completude real de inventário (impossível de provar), `kcmp` bloqueado por seccomp/sandbox (resulta em `unknown`), raiz sob mount real do projeto, bind mounts, namespace diferente, `STATX_MNT_ID_UNIQUE` em kernel < 6.8 (caminho `legacy` só exercitado com mock), WSL2, macOS, comportamento no kernel 7.2.4/ext4 do proprietário, execução em terminal interativo real, SRT com FDs preexistentes.
 
 ## Por que isto não desbloqueia STRONG
 
