@@ -23,6 +23,16 @@ def open_fds():
     return set(os.listdir("/proc/self/fd"))
 
 
+def valid_observed(**changes):
+    """Relatório de sucesso sintático (identidade fictícia) para testes puros."""
+    ident = T.RootIdentity(7, 8, 9, "unique", "mnt:[4026531841]",
+                           T.STATX_TYPE | T.STATX_INO | T.STATX_MNT_ID_UNIQUE)
+    report = T.OpenedRoot(None, ident).describe()
+    report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
+    report["cleanup_failures"] = []
+    return {**report, **changes}
+
+
 class FixtureCase(unittest.TestCase):
     def setUp(self):
         self.parent, self.name = T.make_synthetic_fixture()
@@ -560,6 +570,89 @@ class CliFaultInjectionTests(IsolatedTmpCase):
         self.assertEqual(report["cleanup_failures"], ["anchor_close", "fixture_remove"])
         self.assertEqual(report["result"], "OBSERVED_WITH_CLEANUP_FAILURE")
 
+    def assert_cleanup_report(self, *, failures, result="OBSERVED_WITH_CLEANUP_FAILURE",
+                              residue=None, secrets=("/secret/path", "fictional-user")):
+        rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        T.check_root_report(report)                      # relatório coerente
+        self.assertEqual((rc, report["result"], report["cleanup_failures"]),
+                         (2, result, failures))
+        self.assert_sanitized(out, err)
+        for secret in secrets:
+            self.assertNotIn(secret, out + err)
+        self.assertNotIn("RuntimeError", out + err)
+        return report, before
+
+    def test_unexpected_exceptions_in_each_cleanup_step_are_sanitized(self):
+        boom = RuntimeError("/secret/path /home/fictional-user/segredo")
+        with mock.patch.object(T.OpenedRoot, "close", side_effect=boom):
+            self.assert_cleanup_report(failures=["root_close"])
+        # o FD da raiz NÃO foi fechado (close falsificado): é o custo do mock; o
+        # restante da limpeza (âncora e fixture) continuou e foi concluído
+        self.assertEqual(os.listdir(self.iso), [])
+        real_close, seen = os.close, {}
+        real_open_anchor = T.open_anchor
+
+        def tracking(path):
+            seen["fd"] = real_open_anchor(path)
+            return seen["fd"]
+
+        def failing_close(fd):
+            real_close(fd)
+            if fd == seen.get("fd") and not seen.get("raised"):
+                seen["raised"] = True        # o número é reaproveitado depois
+                raise boom
+        with mock.patch.object(T, "open_anchor", side_effect=tracking), \
+                mock.patch.object(T.os, "close", side_effect=failing_close):
+            report, before = self.assert_cleanup_report(failures=["anchor_close"])
+        self.assertEqual(open_fds(), before)
+        with mock.patch.object(T.shutil, "rmtree", side_effect=boom):
+            self.assert_cleanup_report(failures=["fixture_remove"])
+        self.assertEqual(len(os.listdir(self.iso)), 1)
+
+    def test_consecutive_unexpected_cleanup_failures_are_all_recorded(self):
+        boom = RuntimeError("/home/fictional-user/segredo")
+        with mock.patch.object(T.OpenedRoot, "close", side_effect=boom), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=boom):
+            self.assert_cleanup_report(failures=["fixture_remove", "root_close"])
+
+    def test_unexpected_cleanup_failure_after_refusal_stays_refused(self):
+        boom = RuntimeError("/home/fictional-user/segredo")
+        with mkdir_failing_for_root(), mock.patch.object(T.shutil, "rmtree", side_effect=boom):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        T.check_root_report(report)
+        self.assertEqual((rc, report["result"], report["reason"], report["cleanup_failures"]),
+                         (2, "REFUSED", "infrastructure_EACCES", ["fixture_remove"]))
+        self.assert_sanitized(out, err, "fictional-user")
+
+    def test_unexpected_error_while_building_fixture_is_cleaned_and_sanitized(self):
+        boom = RuntimeError("/home/fictional-user/segredo")
+        with mock.patch.object(T.os, "write", side_effect=boom), \
+                mock.patch.object(T.shutil, "rmtree", side_effect=boom):
+            rc, out, err, before = self.run_main()
+        report = json.loads(out)
+        T.check_root_report(report)
+        self.assertEqual((report["result"], report["reason"], report["cleanup_failures"]),
+                         ("REFUSED", "unexpected_failure", ["fixture_remove"]))
+        self.assert_sanitized(out, err, "fictional-user")
+        self.assertEqual(open_fds(), before)
+
+    def test_remove_fixture_never_raises(self):
+        parent, _ = T.make_synthetic_fixture()
+        for exc in (RuntimeError("/home/fictional-user/x"), KeyError("k"), ValueError("v")):
+            with mock.patch.object(T.shutil, "rmtree", side_effect=exc):
+                self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])
+            self.assertTrue(os.path.isdir(parent))
+        with mock.patch.object(T.os.path, "lexists", side_effect=RuntimeError("x")):
+            self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])
+        self.assertEqual(T._remove_fixture(parent), [])        # controle positivo
+        self.assertFalse(os.path.lexists(parent))
+
+    def test_refused_reason_never_reproduces_arbitrary_text(self):
+        report = T._refused_report("/home/fictional-user/segredo")
+        self.assertEqual(report["reason"], "unexpected_failure")
+
     def test_incoherent_report_is_replaced_by_a_refusal(self):
         with mock.patch.object(T, "check_root_report", side_effect=[ValueError("x"), None]) as chk:
             chk.side_effect = [ValueError("x"), {"ok": True}]
@@ -614,6 +707,38 @@ class CleanupRealTests(IsolatedTmpCase):
             self.assertEqual(T._remove_fixture(bad), ["fixture_remove"])
 
 
+    def test_matching_name_location_and_type_do_not_prove_this_run_created_it(self):
+        # nome, pasta temporária e não-symlink conferem, mas a execução não o criou
+        stranger = os.path.join(self.iso, "gh-f1-18-fixture-stranger")
+        os.mkdir(stranger)
+        self.assertEqual(T._remove_fixture(stranger), ["fixture_remove"])
+        self.assertTrue(os.path.isdir(stranger))
+
+    def test_fixture_replaced_after_creation_is_not_removed(self):
+        parent, _ = T.make_synthetic_fixture()
+        os.rename(parent, parent + "-moved")
+        os.mkdir(parent)                                  # outro diretório, mesmo nome
+        with open(os.path.join(parent, "alheio.txt"), "w") as f:
+            f.write("dado de outro")
+        self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])
+        self.assertTrue(os.path.exists(os.path.join(parent, "alheio.txt")))
+        # symlink no lugar da fixture também é recusado
+        shutil.rmtree(parent)
+        victim = os.path.join(self.iso, "victim")
+        os.mkdir(victim)
+        os.symlink(victim, parent)
+        self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])
+        self.assertTrue(os.path.isdir(victim))
+        T._CREATED.pop(parent, None)
+
+    def test_registered_fixture_is_removed_once_and_forgotten(self):
+        parent, _ = T.make_synthetic_fixture()
+        self.assertIn(parent, T._CREATED)
+        self.assertEqual(T._remove_fixture(parent), [])
+        self.assertNotIn(parent, T._CREATED)
+        self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])   # já esquecida
+
+
 class PureMockTests(unittest.TestCase):
     """Sem syscalls: apenas lógica."""
 
@@ -637,11 +762,9 @@ class PureMockTests(unittest.TestCase):
         self.refused("invalid_identity", T.compare, None, base)
 
     def test_check_root_report_rejects_contradictions(self):
-        ok = T._refused_report("x", ["fixture_remove"])
+        ok = T._refused_report("xdev_refused", ["fixture_remove"])
         T.check_root_report(ok)
-        observed = {**T.INVARIANTS, "schema": "trusted-root-diagnostic/1",
-                    "result": "IDENTITY_OBSERVED_NOT_AUTHORIZED", "synthetic_only": True,
-                    "cleanup_failures": []}
+        observed = valid_observed()
         T.check_root_report(observed)
         T.check_root_report({**observed, "result": "OBSERVED_WITH_CLEANUP_FAILURE",
                              "cleanup_failures": ["anchor_close"]})
@@ -652,7 +775,7 @@ class PureMockTests(unittest.TestCase):
             {"cleanup_failures": ["/home/x"]},                      # código não sanitizado
             {"cleanup_failures": ["fixture_remove", "anchor_close"]},  # fora de ordem
             {"cleanup_failures": "none"}, {"cleanup_failures": None},
-            {"reason": "x"},                                         # reason sem REFUSED
+            {"reason": "xdev_refused"},                              # reason sem REFUSED
             {"synthetic_only": False},
             {"inventory_effectively_complete": True},
             {"unobserved_capabilities_excluded": 1},
@@ -668,6 +791,85 @@ class PureMockTests(unittest.TestCase):
         for junk in (missing, None, [], "x"):
             with self.assertRaises(ValueError):
                 T.check_root_report(junk)
+
+    def test_root_report_schema_is_strict_per_field(self):
+        """Cada campo crítico é adulterado sozinho: ausente, tipo errado, valor
+        sensível ou contradição. A validação NÃO prova autenticidade."""
+        observed = valid_observed()
+        refused = T._refused_report("xdev_refused")
+        for good in (observed, refused):
+            T.check_root_report(good)
+
+        def tampered(report, msg, **changes):
+            bad = {**report, **changes}
+            with self.assertRaises(ValueError, msg=msg):
+                T.check_root_report(bad)
+        for key in observed:                          # 1. campo ausente
+            bad = dict(observed)
+            del bad[key]
+            with self.assertRaises(ValueError, msg="missing " + key):
+                T.check_root_report(bad)
+        for key in refused:
+            bad = dict(refused)
+            del bad[key]
+            with self.assertRaises(ValueError, msg="missing refused " + key):
+                T.check_root_report(bad)
+        for value in ("wrong", "", None, 1, "trusted-root-diagnostic/2"):   # 2. schema
+            tampered(observed, ("schema", value), schema=value)
+            tampered(refused, ("schema", value), schema=value)
+        for name in ("owner_authenticated", "owner_grant_implemented",
+                     "aba_protection_proven", "external_writers_excluded",
+                     "anchor_provenance_verified"):   # 3. campos negativos
+            for value in (True, 1, 0, "false", None):
+                tampered(observed, (name, value), **{name: value})
+                tampered(refused, (name, value), **{name: value})
+        for value in (False, 1, "true", None):        # 4. synthetic_only
+            tampered(observed, ("synthetic_only", value), synthetic_only=value)
+            tampered(refused, ("synthetic_only", value), synthetic_only=value)
+        for value in ("authorized", "", None, 7):     # 5. identity_scope
+            tampered(observed, ("identity_scope", value), identity_scope=value)
+        ident = observed["identity"]
+        for value in (None, [], "x", {}, {**ident, "extra": 1}):           # 6. identity
+            tampered(observed, ("identity", value), identity=value)
+        for field, values in {"dev": (-1, "1", True, None, 1.5),
+                              "ino": (-1, "1", True, None),
+                              "mnt_id": (-1, "1", True, None),
+                              "statx_mask": (-1, "1", True, None, 0, 0x1),
+                              "mnt_id_variant": ("other", None, 1, "UNIQUE"),
+                              "mnt_ns": ("/home/fictional-user/ns", "mnt:[x]", 7, "",
+                                         "mnt:[1]\n")}.items():
+            for value in values:
+                tampered(observed, ("identity." + field, value),
+                         identity={**ident, field: value})
+        gone = {k: v for k, v in ident.items() if k != "ino"}
+        tampered(observed, "identity sem ino", identity=gone)
+        # máscara sem o bit do identificador de montagem da variante declarada
+        tampered(observed, "mask/variant", identity={**ident, "mnt_id_variant": "legacy",
+                                                     "statx_mask": T.STATX_TYPE | T.STATX_INO | T.STATX_MNT_ID_UNIQUE})
+        # 7. contradições entre result, reason, identity e cleanup_failures
+        tampered(observed, "refused sem reason", result="REFUSED")
+        tampered(observed, "reason em não-refused", reason="xdev_refused")
+        tampered(refused, "refused com identity", identity=ident)
+        tampered(refused, "refused com scope", identity_scope="comparison_only")
+        tampered(refused, "refused sucesso", result="IDENTITY_OBSERVED_NOT_AUTHORIZED")
+        tampered(observed, "sucesso com falha", cleanup_failures=["root_close"])
+        tampered(observed, "falha sem código", result="OBSERVED_WITH_CLEANUP_FAILURE")
+        tampered(observed, "campo extra", surprise=1)
+        # 8. reason: conjunto fixo, nada reproduzido
+        for value in ("x", "/private/path", "xdev_refused\n", None, 7, ["xdev_refused"],
+                      "infrastructure_/private", "infrastructure_NOTANERRNO",
+                      "Traceback (most recent call last)", ""):
+            tampered(refused, ("reason", value), reason=value)
+        for good in ("unexpected_failure", "infrastructure_ENOSPC", "root_missing"):
+            T.check_root_report({**refused, "reason": good})
+        # 9. cleanup_failures: tipos e conteúdo
+        for value in ([1], [None], [["root_close"]], ["root_close", "root_close"],
+                      ["x"], ("root_close",), "root_close"):
+            tampered(observed, ("cleanup_failures", value), result="OBSERVED_WITH_CLEANUP_FAILURE",
+                     cleanup_failures=value)
+        # 10. invariantes continuam valendo
+        tampered(observed, "strong", strong="STRONG")
+        tampered(observed, "agent", agent_execution_authorized=True)
 
     def test_check_report_validates_new_completeness_fields_only_when_present(self):
         base = {**T.INVARIANTS}
@@ -707,7 +909,7 @@ class PureMockTests(unittest.TestCase):
                 T.check_report(junk)
 
     def test_describe_and_refused_reports_keep_the_invariants(self):
-        refused = T._refused_report("whatever", ["fixture_remove", "anchor_close"])
+        refused = T._refused_report("root_missing", ["fixture_remove", "anchor_close"])
         self.assertEqual(refused["cleanup_failures"], ["anchor_close", "fixture_remove"])
         self.assertEqual(refused["strong"], "UNAVAILABLE")
         ident = T.RootIdentity(1, 2, 3, "unique", "mnt:[1]", 0x1100)

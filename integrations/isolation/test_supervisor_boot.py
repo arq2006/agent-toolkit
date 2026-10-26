@@ -16,6 +16,7 @@ Toda manipulação de FD ocorre só nos filhos; o processo do operador e o
 terminal nunca são alterados. Timeout/saída malformada do filho = falha
 (evidência insuficiente). Sem kcmp o teste é pulado: skip NÃO é evidência.
 """
+import contextlib
 import json
 import os
 import subprocess
@@ -206,6 +207,10 @@ for step in steps:
     elif step == "reuse_closed_pipe_read":
         os.close(pipes[0][0])
         real_open(probe, os.O_RDONLY | os.O_CLOEXEC)
+    elif step == "kernel_objects":
+        import select, socket
+        keep = [select.epoll(), socket.socketpair(), os.eventfd(0), os.pipe()]
+        notes["kernel_objects"] = len(keep)
     elif step == "kcmp_unavailable":
         B.platform.machine = lambda: "riscv64"
     elif step == "eval":
@@ -229,6 +234,179 @@ def run_child(steps=(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stdin=stdin, stdout=stdout, stderr=stderr, pass_fds=pass_fds,
             timeout=60, close_fds=True, env={})
         result = probe + ".result"
+        if proc.returncode != 0 or not os.path.exists(result):
+            raise AssertionError("filho falhou (evidência insuficiente): rc=%s" % proc.returncode)
+        with open(result) as f:
+            return json.load(f)
+
+# Filho dedicado às injeções de falha do registro: uma falha por execução, em um
+# ponto nomeado, com verificação do conjunto REAL de FDs abertos e do estado.
+CHILD_FAULT = r"""
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import supervisor_boot as B
+factory, where, nth, slot, interpose = (sys.argv[2], sys.argv[3], int(sys.argv[4]),
+                                        sys.argv[5], sys.argv[6] == "1")
+real_fcntl, real_close, real_open = B.fcntl.fcntl, os.close, os.open
+
+
+def openset():
+    found = set()
+    for fd in range(256):
+        try:
+            real_fcntl(fd, B.fcntl.F_GETFD)
+            found.add(fd)
+        except OSError:
+            pass
+    return found
+
+
+class Boom(RuntimeError):
+    pass
+
+
+count = [0]
+
+
+def tick():
+    count[0] += 1
+    if count[0] == nth:
+        raise Boom("/home/fictional-user/segredo")
+
+
+class FailList(list):
+    def append(self, item):
+        tick()
+        super().append(item)
+
+
+class FailDict(dict):
+    def __setitem__(self, key, value):
+        tick()
+        super().__setitem__(key, value)
+
+
+class FailSet(set):
+    def add(self, item):
+        tick()
+        super().add(item)
+
+
+reg = B.CapabilityRegistry()
+target = 1
+if factory == "place" and slot == "closed":
+    real_close(target)
+before = openset()
+closed_log, interposed = [], []
+
+
+def close_wrap(fd):
+    closed_log.append(fd)
+    src = real_open("/dev/null", os.O_RDONLY | os.O_CLOEXEC) if interpose else None
+    real_close(fd)
+    if interpose:      # um FD novo assume IMEDIATAMENTE o número que acabou de ser liberado
+        os.dup2(src, fd, inheritable=False)
+        real_close(src)
+        interposed.append(fd)
+
+
+if where == "anchor":
+    def fn(fd, cmd, *a):
+        if cmd == B.fcntl.F_DUPFD_CLOEXEC:
+            tick()
+        return real_fcntl(fd, cmd, *a)
+    B.fcntl.fcntl = fn
+elif where == "created":
+    RealCreated = B._Created
+
+    def ctor(*a):
+        tick()
+        return RealCreated(*a)
+    B._Created = ctor
+elif where == "pending":
+    reg._pending = FailList()
+elif where == "grant":
+    RealGrant = B.Grant
+
+    def gctor(*a):
+        tick()
+        return RealGrant(*a)
+    B.Grant = gctor
+elif where == "grants":
+    reg._grants = FailDict()
+elif where == "issued":
+    reg._issued = FailSet()
+elif where == "owned":
+    reg._owned = FailSet()
+elif where != "none":
+    raise SystemExit("ponto desconhecido")
+os.close = close_wrap
+
+
+def call():
+    return reg.make_pipe() if factory == "pipe" else reg.place_devnull(target)
+
+
+out = {}
+try:
+    call()
+    out["exc"] = "NO_ERROR"
+except B.BootRefused as e:
+    out["exc"] = "BootRefused:" + e.code
+except Exception as e:
+    out["exc"] = type(e).__name__
+out["state"] = {"grants": len(reg._grants), "issued": len(reg._issued),
+                "pending": len(reg._pending), "owned": len(reg._owned)}
+os.close = real_close
+B.fcntl.fcntl = real_fcntl
+after = openset()
+out.update(before=sorted(before), after=sorted(after), closed_log=list(closed_log),
+           interposed=list(interposed), interposed_open=sorted(set(interposed) & after))
+# o registro continua utilizável: sem a falha, a mesma fábrica funciona
+if where in ("grant", "created"):
+    B.Grant, B._Created = RealGrant if where == "grant" else B.Grant, \
+        RealCreated if where == "created" else B._Created
+else:
+    reg._pending = list(reg._pending)
+    reg._grants = dict(reg._grants)
+    reg._issued = set(reg._issued)
+    reg._owned = set(reg._owned)
+out["retry_state_before"] = {"grants": len(reg._grants), "owned": len(reg._owned)}
+try:
+    call()
+    out["retry"] = "ok"
+except Exception as e:
+    out["retry"] = type(e).__name__
+out["retry_state"] = {"grants": len(reg._grants), "issued": len(reg._issued),
+                      "pending": len(reg._pending), "owned": len(reg._owned)}
+report = B.diagnose(reg)
+out["authorized"] = [(e["fd"], e["reason"]) for e in report.get("entries", [])
+                     if e["status"] == "authorized"]
+closed_log.clear()
+interposed.clear()
+os.close = close_wrap
+reg.close()
+reg.close()
+os.close = real_close
+out["close_log"] = list(closed_log)
+out["close_interposed_open"] = sorted(set(interposed) & openset())
+out["close_interposed"] = sorted(set(interposed))
+out["after_close"] = {"grants": len(reg._grants), "owned": len(reg._owned),
+                      "pending": len(reg._pending), "closed": reg.closed}
+with open(sys.argv[7], "w") as f:
+    json.dump(out, f)
+"""
+
+
+def run_fault(factory, where, nth=1, slot="open", interpose=False):
+    """Roda uma injeção de falha num filho descartável; devolve o JSON do filho."""
+    with tempfile.TemporaryDirectory(prefix="gh-f1-18-fault-") as tmp:
+        result = os.path.join(tmp, "result.json")
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", CHILD_FAULT, HERE, factory, where, str(nth), slot,
+             "1" if interpose else "0", result],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=60, close_fds=True, env={})
         if proc.returncode != 0 or not os.path.exists(result):
             raise AssertionError("filho falhou (evidência insuficiente): rc=%s" % proc.returncode)
         with open(result) as f:
@@ -264,7 +442,11 @@ def inventory(*entries, **over):
 
 
 def grant(fd, kind="chr_devnull", dev=5, ino=6, flags=2, inheritable=True, anchor=None):
-    return B.Grant(fd, kind, dev, ino, flags, inheritable, "stdio_devnull",
+    purpose = {"chr_devnull": "stdio_devnull"}.get(kind, "x")
+    if kind == "fifo":
+        purpose = "supervisor_pipe_read" if flags & os.O_ACCMODE == 0 \
+            else "supervisor_pipe_write"
+    return B.Grant(fd, kind, dev, ino, flags, inheritable, purpose,
                    100 + fd if anchor is None else anchor)
 
 
@@ -319,7 +501,8 @@ class PureLogicTests(unittest.TestCase):
                     std_registry())
         self.assertEqual(report["unknown_fds"], [7])
         for kind in ("socket", "regular", "directory", "tty", "fifo"):
-            report = ev(inventory(entry(0, kind, 9, 9), entry(1), entry(2)), std_registry())
+            report = ev(inventory(entry(0, kind, 9, 9, target="<redacted-path>"),
+                                  entry(1), entry(2)), std_registry())
             self.assertEqual(report["unknown_fds"], [0], kind)
             self.assertEqual(report["entries"][0]["reason"], "grant_mismatch")
             self.assertIn("identity", report["entries"][0]["mismatch"])
@@ -370,7 +553,7 @@ class PureLogicTests(unittest.TestCase):
         bad = [entry(10, cloexec=False), *anchors[1:]]       # âncora herdável
         report = ev(inventory(entry(0), entry(1), entry(2), *bad), reg)
         self.assertEqual(report["unknown_fds"], [10])
-        bad = [entry(10, "regular", 1, 1, True), *anchors[1:]]  # âncora trocada
+        bad = [entry(10, "regular", 1, 1, True, target="<redacted-path>"), *anchors[1:]]  # âncora trocada
         self.assertEqual(ev(inventory(entry(0), entry(1), entry(2), *bad), reg)["unknown_fds"], [10])
 
     def test_closed_stdio_and_vanished_grant_are_not_clean(self):
@@ -433,14 +616,17 @@ class PureLogicTests(unittest.TestCase):
             self.refused("inventory_malformed", junk)
 
     def test_caller_supplied_targets_are_refused_unless_in_the_closed_format(self):
-        def with_target(target):
+        def with_target(target, kind="fifo"):
             return inventory(entry(0), entry(1), entry(2),
-                             entry(7, "fifo", 1, 2, True, 0, target, access="rdonly"))
+                             entry(7, kind, 1, 2, True, 0, target, access="rdonly"))
         reg = std_registry()
-        # controles positivos: alvos legítimos e previamente sanitizados
-        for good in ("pipe:[12345]", "socket:[9]", "anon_inode:[eventpoll]",
-                     "anon_inode:inotify", "/dev/null", "<tty>", "<redacted-path>"):
-            report = ev(with_target(good), reg)
+        # controles positivos: alvos legítimos, cada um com o kind coerente
+        for kind, good in (("fifo", "pipe:[12345]"), ("socket", "socket:[9]"),
+                           ("anon_inode", "anon_inode:[eventpoll]"),
+                           ("anon_inode", "anon_inode:inotify"),
+                           ("chr_devnull", "/dev/null"), ("tty", "<tty>"),
+                           ("fifo", "<redacted-path>"), ("regular", "<redacted-path>")):
+            report = ev(with_target(good, kind), reg)
             self.assertEqual(report["entries"][3]["target"], good)
             self.assertEqual(report["inventory_provenance"], "caller_supplied_unverified")
         # negativos: nada fornecido pelo chamador é reproduzido no relatório
@@ -449,7 +635,8 @@ class PureLogicTests(unittest.TestCase):
                     "anon_inode:/private/path", personal, "pipe:" + personal,
                     "pipe:[1]/x", "pipe:[abc]", "pipe:[]", "pipe:[" + "9" * 30 + "]",
                     "pipe:[1]\n", "pipe:[1]\x00", "anon_inode:[a/b]",
-                    "anon_inode:" + "x" * 40, "<tty>/x", " /dev/null", "/dev/nullx", ""):
+                    "anon_inode:" + "x" * 40, "<tty>/x", " /dev/null", "/dev/nullx", "",
+                    "anon_inode:[eventpoll", "anon_inode:eventpoll]", "anon_inode:[]"):
             with self.assertRaises(B.BootRefused, msg=bad) as caught:
                 ev(with_target(bad), reg)
             self.assertEqual(caught.exception.code, "inventory_target_invalid")
@@ -462,13 +649,20 @@ class PureLogicTests(unittest.TestCase):
         self.assertNotIn("fictional-user", json.dumps(refused))
 
     def test_real_target_sanitizer_only_returns_the_closed_format(self):
-        for raw, expected in (("/dev/null", "/dev/null"), ("pipe:[7]", "pipe:[7]"),
-                              ("anon_inode:[eventpoll]", "anon_inode:[eventpoll]"),
-                              ("/dev/pts/3", "<tty>"), ("/home/x/file", "<redacted-path>"),
-                              ("pipe:/home/x", "<redacted-path>"),
-                              ("anon_inode:" + "y" * 50, "<redacted-path>")):
-            self.assertEqual(B._safe_target(raw), expected)
-            self.assertTrue(B._SAFE_TARGET.match(B._safe_target(raw)))
+        for raw, kind, expected in (
+                ("/dev/null", "chr_devnull", "/dev/null"), ("pipe:[7]", "fifo", "pipe:[7]"),
+                ("anon_inode:[eventpoll]", "anon_inode", "anon_inode:[eventpoll]"),
+                ("/dev/pts/3", "tty", "<tty>"), ("/home/x/file", "regular", "<redacted-path>"),
+                ("pipe:/home/x", "fifo", "<redacted-path>"),
+                ("anon_inode:" + "y" * 50, "anon_inode", "<redacted-path>"),
+                # formato válido de OUTRO kind nunca é reproduzido
+                ("pipe:[7]", "regular", "<redacted-path>"),
+                ("/dev/null", "regular", "<redacted-path>"),
+                ("/dev/pts/3", "chr_other", "<redacted-path>"),
+                ("anon_inode:[eventpoll", "anon_inode", "<redacted-path>")):
+            safe = B._safe_target(raw, kind)
+            self.assertEqual(safe, expected)
+            self.assertEqual(B._target_state(kind, safe), "ok")
 
     def test_validated_inventory_still_has_no_provenance(self):
         report = B.evaluate(std_inventory(), std_registry())
@@ -478,7 +672,7 @@ class PureLogicTests(unittest.TestCase):
         self.assertTrue(any("proveniência" in text for text in report["limitations"]))
         self.assertEqual(B._diagnose(std_registry(), lambda: std_inventory())[
             "inventory_provenance"], "caller_supplied_unverified")
-        self.assertEqual(B._report("REFUSED", reason="x")["inventory_provenance"], "none")
+        self.assertEqual(B._report("REFUSED", reason="inventory_malformed")["inventory_provenance"], "none")
 
     def test_no_declaration_api_exists_in_production(self):
         for name in ("_MINT", "_mint_grant", "_registry_with", "_record"):
@@ -550,7 +744,7 @@ class PureLogicTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "invalid_target")
 
     def test_reserved_report_fields_cannot_be_overridden(self):
-        base = B._report("REFUSED", reason="x")
+        base = B._report("REFUSED", reason="inventory_malformed")
         self.assertEqual(base["verdict"], "REFUSED")
         for field, value in (("strong", "STRONG"), ("readiness", "READY"),
                              ("agent_execution_authorized", True),
@@ -569,19 +763,19 @@ class PureLogicTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             B._report("TRUSTED")
         with self.assertRaises(ValueError):          # proveniência inventada
-            B._report("REFUSED", provenance="trusted_by_owner", reason="x")
+            B._report("REFUSED", provenance="trusted_by_owner", reason="inventory_malformed")
 
     def test_invariants_are_read_only_and_reports_are_independent_copies(self):
         with self.assertRaises(TypeError):
             T.INVARIANTS["strong"] = "STRONG"
         self.assertIs(B.INVARIANTS, T.INVARIANTS)
-        report = B._report("REFUSED", reason="x")
+        report = B._report("REFUSED", reason="inventory_malformed")
         report["strong"] = "STRONG"            # alterar a cópia não toca a constante
         self.assertEqual(T.INVARIANTS["strong"], "UNAVAILABLE")
-        self.assertEqual(B._report("REFUSED", reason="x")["strong"], "UNAVAILABLE")
+        self.assertEqual(B._report("REFUSED", reason="inventory_malformed")["strong"], "UNAVAILABLE")
 
     def test_check_report_rejects_tampered_or_mistyped_invariants(self):
-        good = B._report("REFUSED", reason="x")
+        good = B._report("REFUSED", reason="inventory_malformed")
         T.check_report(good)
         for key, value in (("agent_execution_authorized", True),
                            ("agent_execution_authorized", 0),
@@ -606,7 +800,7 @@ class PureLogicTests(unittest.TestCase):
                                                                      "<redacted-path>",
                                                                      access="rdonly")),
                      std_registry())
-        refused = B._report("REFUSED", reason="x")
+        refused = B._report("REFUSED", reason="inventory_malformed")
         for good in (clean, unknown, refused):
             B.check_boot_report(good)
 
@@ -651,6 +845,165 @@ class PureLogicTests(unittest.TestCase):
                 B.check_boot_report(junk)
         tampered(clean, entries="all-good")
 
+    def test_fabricated_boot_reports_are_refused_field_by_field(self):
+        """P2-02: cada campo crítico é adulterado sozinho (ausente, tipo errado,
+        texto sensível, contradição). O relatório de partida é aceito."""
+        clean = ev(std_inventory(), std_registry())
+        unknown = ev(inventory(entry(0), entry(1), entry(2),
+                               entry(7, "regular", 1, 2, True, 0, "<redacted-path>",
+                                     access="rdonly")), std_registry())
+        closed = ev(inventory(entry(0), entry(1)), std_registry())   # std_closed/missing
+        refused = B._report("REFUSED", reason="inventory_malformed")
+        for good in (clean, unknown, closed, refused):
+            B.check_boot_report(good)
+
+        def tampered(report, msg, **changes):
+            bad = {**report, **changes}
+            with self.assertRaises(ValueError, msg=msg):
+                B.check_boot_report(bad)
+
+        def with_entry(report, index, **changes):
+            entries = [dict(e) for e in report["entries"]]
+            entries[index].update(changes)
+            return entries
+        # 1. o caso do relatório de auditoria
+        tampered(clean, "fabricado", entries=[{"fd": "not-an-int", "status": "authorized",
+                                               "target": "/private/path"}],
+                 inventory_provenance="none")
+        # 2. campos de entrada: tipo errado, ausente, texto sensível
+        wrong = {"fd": ("0", None, True, -1, 1.5, [0]), "kind": ("wormhole", None, 3),
+                 "dev": ("1", None, True, -1), "ino": ("1", None, True, -1),
+                 "flags": ("2", None, True, -1), "cloexec": (1, 0, "false", None),
+                 "opath": (1, 0, "false", None), "access": ("write", None, 2),
+                 "target": ("/private/path", "pipe:/x", None, 7, "/dev/null\n"),
+                 "status": ("trusted", None, 1, True), "reason": ("x", None, 5, "/private"),
+                 "mismatch": ("identity", None, 1, ["bogus"], [7], ["opath", "identity"],
+                              ["identity", "identity"])}
+        for key, values in wrong.items():
+            for value in values:
+                tampered(clean, (key, value), entries=with_entry(clean, 0, **{key: value}))
+        for key in clean["entries"][0]:
+            entries = [dict(e) for e in clean["entries"]]
+            del entries[0][key]
+            tampered(clean, ("missing", key), entries=entries)
+        tampered(clean, "extra", entries=with_entry(clean, 0, secret="/home/fictional-user/x"))
+        tampered(clean, "entry nao dict", entries=["fd=0"])
+        tampered(clean, "entries nao lista", entries="ok")
+        # 3. coerência dentro da entrada
+        tampered(clean, "kind/target", entries=with_entry(clean, 0, kind="regular"))
+        tampered(clean, "access/flags", entries=with_entry(clean, 0, access="rdonly"))
+        tampered(clean, "autorizada com mismatch", entries=with_entry(clean, 0, mismatch=["ofd"]))
+        tampered(clean, "autorizada por razão desconhecida",
+                 entries=with_entry(clean, 0, reason="made_up"))
+        tampered(clean, "stdio_devnull fora de 0..2", entries=with_entry(clean, 0, fd=9))
+        tampered(clean, "razão de pipe em devnull",
+                 entries=with_entry(clean, 0, reason="supervisor_pipe_read"))
+        tampered(clean, "autorizada sem direito", entries=with_entry(clean, 0, cloexec=True))
+        tampered(unknown, "grant_mismatch sem diferença",
+                 entries=with_entry(unknown, 3, reason="grant_mismatch"))
+        tampered(unknown, "no_grant com diferença", entries=with_entry(unknown, 3, mismatch=["identity"]))
+        tampered(unknown, "anchor_mismatch errado",
+                 entries=with_entry(unknown, 3, reason="anchor_mismatch", mismatch=["ofd"]))
+        tampered(unknown, "razão de autorizado em unknown",
+                 entries=with_entry(unknown, 3, reason="stdio_devnull"))
+        tampered(unknown, "unknown virou authorized",
+                 entries=with_entry(unknown, 3, status="authorized"))
+        tampered(clean, "entradas fora de ordem", entries=list(reversed(clean["entries"])))
+        tampered(clean, "entradas duplicadas", entries=clean["entries"] + clean["entries"][:1])
+        # 4. listas: tipo, ordem, unicidade e relação com as entradas
+        for key in ("unknown_fds", "std_closed", "grants_missing"):
+            for value in (None, "0", (0,), [True], [-1], ["0"], [1, 0], [0, 0], [1.5]):
+                tampered(clean, (key, value), **{key: value})
+        tampered(clean, "unknown_fds vs entries", unknown_fds=[0])
+        tampered(unknown, "unknown_fds vazia", unknown_fds=[])
+        tampered(unknown, "unknown_fds errada", unknown_fds=[3])
+        tampered(clean, "std_closed aberto", std_closed=[0], verdict="UNKNOWN_CAPABILITIES")
+        tampered(closed, "std_closed vazia", std_closed=[])
+        tampered(closed, "std_closed extra", std_closed=[1, 2])
+        tampered(closed, "missing em fd presente", grants_missing=[0, 2])
+        # 5. veredito x observação
+        tampered(clean, "veredito", verdict="UNKNOWN_CAPABILITIES")
+        tampered(unknown, "veredito", verdict="CLEAN_FOR_GRANTS")
+        tampered(closed, "veredito", verdict="CLEAN_FOR_GRANTS")
+        tampered(clean, "REFUSED com listas", verdict="REFUSED", reason="inventory_malformed")
+        # 6. proveniência
+        for value in ("none", "trusted_by_owner", None, 1, ["none"], ""):
+            tampered(clean, ("provenance", value), inventory_provenance=value)
+        tampered(unknown, "provenance none", inventory_provenance="none")
+        for value in ("collected_in_process", "caller_supplied_unverified", "trusted", None):
+            tampered(refused, ("refused provenance", value), inventory_provenance=value)
+        # 7. REFUSED: motivo de conjunto fixo, sem listas
+        for value in ("x", "/private/path", "", None, 7, ["inventory_malformed"],
+                      "inventory_malformed\n", "place_devnull_failed"):
+            tampered(refused, ("reason", value), reason=value)
+        for key in ("entries", "unknown_fds", "std_closed", "grants_missing"):
+            tampered(refused, ("refused+" + key), **{key: []})
+        del_reason = dict(refused)
+        del del_reason["reason"]
+        with self.assertRaises(ValueError):
+            B.check_boot_report(del_reason)
+        tampered(clean, "CLEAN com reason", reason="inventory_malformed")
+        # 8. nível superior: schema, textos fixos, chaves exatas
+        for value in ("wrong", None, 3, "supervisor-boot-diagnostic/2"):
+            tampered(clean, ("schema", value), schema=value)
+        tampered(clean, "inventory_source", inventory_source="/private/path")
+        tampered(clean, "limitations", limitations=[])
+        tampered(clean, "limitations", limitations=["/private/path"])
+        tampered(clean, "not_verified", not_verified=None)
+        tampered(clean, "extra no topo", surprise="/home/fictional-user")
+        tampered(clean, "close_range", close_range_used=True)
+        tampered(clean, "verdict tipo", verdict=["CLEAN_FOR_GRANTS"])
+        # 9. a validação é de forma/coerência: um relatório forjado e coerente passa
+        forged = {**clean, "inventory_provenance": "collected_in_process"}
+        B.check_boot_report(forged)
+        self.assertTrue(any("autenticidade" in text for text in clean["limitations"]))
+
+    def test_kind_and_target_must_agree(self):
+        """P3-01: o formato do alvo precisa ser o do kind (ou o genérico)."""
+        def one(kind, target):
+            return inventory(entry(0), entry(1), entry(2),
+                             entry(7, kind, 1, 2, True, 0, target, access="rdonly"))
+        reg = std_registry()
+        coherent = [("fifo", "pipe:[1]"), ("socket", "socket:[1]"),
+                    ("chr_devnull", "/dev/null"), ("tty", "<tty>"),
+                    ("anon_inode", "anon_inode:[eventpoll]"), ("anon_inode", "anon_inode:inotify")]
+        for kind, target in coherent:
+            ev(one(kind, target), reg)
+        for kind in B.KINDS:
+            ev(one(kind, "<redacted-path>"), reg)             # genérico serve a todos
+        # formato válido, kind errado
+        for kind, target in (("regular", "pipe:[1]"), ("socket", "pipe:[1]"),
+                             ("fifo", "socket:[1]"), ("directory", "/dev/null"),
+                             ("regular", "<tty>"), ("tty", "/dev/null"),
+                             ("chr_devnull", "anon_inode:[x]"), ("other", "socket:[2]")):
+            with self.assertRaises(B.BootRefused, msg=(kind, target)) as caught:
+                ev(one(kind, target), reg)
+            self.assertEqual(caught.exception.code, "inventory_contradictory")
+        # formato inválido (colchetes soltos, vazio, caminhos)
+        for kind, target in (("anon_inode", "anon_inode:[eventpoll"),
+                             ("anon_inode", "anon_inode:eventpoll]"),
+                             ("anon_inode", "anon_inode:[]"), ("fifo", "pipe:[1"),
+                             ("regular", "/etc/passwd")):
+            with self.assertRaises(B.BootRefused, msg=(kind, target)) as caught:
+                ev(one(kind, target), reg)
+            self.assertEqual(caught.exception.code, "inventory_target_invalid")
+        # o mesmo vale na validação do relatório já classificado
+        report = ev(one("fifo", "pipe:[1]"), reg)
+        B.check_boot_report(report)
+        bad = [dict(e) for e in report["entries"]]
+        bad[3]["kind"] = "regular"
+        with self.assertRaises(ValueError):
+            B.check_boot_report({**report, "entries": bad})
+        bad[3].update(kind="anon_inode", target="anon_inode:[eventpoll")
+        with self.assertRaises(ValueError):
+            B.check_boot_report({**report, "entries": bad})
+        # o coletor real nunca produz alvo incoerente com o kind que ele mesmo escolheu
+        for target, kind in (("pipe:[3]", "fifo"), ("/home/u/x", "regular"),
+                             ("/dev/null", "regular"), ("anon_inode:[eventfd]", "regular")):
+            safe = B._safe_target(target, kind)
+            self.assertEqual(B._target_state(kind, safe), "ok")
+
+
     def test_report_builder_refuses_incoherent_results(self):
         # "CLEAN" com listas inconsistentes não pode ser construído pelas rotas internas
         with self.assertRaises(ValueError):
@@ -661,7 +1014,9 @@ class PureLogicTests(unittest.TestCase):
                       grants_missing=[])
         with self.assertRaises(ValueError):
             B._report("REFUSED")                      # sem reason
-        B._report("CLEAN_FOR_GRANTS", entries=[], unknown_fds=[], std_closed=[],
+        base = ev(std_inventory(), std_registry())     # controle positivo coerente
+        B._report("CLEAN_FOR_GRANTS", provenance="collected_in_process",
+                  entries=base["entries"], unknown_fds=[], std_closed=[],
                   grants_missing=[])
 
     def test_unexpected_diagnosis_failure_is_a_conservative_refusal(self):
@@ -829,8 +1184,11 @@ class ChildProcessTests(unittest.TestCase):
         self.assertEqual(report["unknown_fds"], [0, 1, 2])
         self.assertTrue(all(e["reason"] == "no_grant" for e in report["entries"]))
         # controle positivo: a fábrica, que CRIA o FD, é reconhecida
-        control = run_child([*CLEAN_STD, "eval"], stdin=inherited_file(), stdout=inherited_file(),
-                            stderr=inherited_file())
+        with contextlib.ExitStack() as stack:    # fecha os três arquivos temporários
+            control = run_child([*CLEAN_STD, "eval"],
+                                stdin=stack.enter_context(inherited_file()),
+                                stdout=stack.enter_context(inherited_file()),
+                                stderr=stack.enter_context(inherited_file()))
         self.assertEqual(control["stages"][-1]["verdict"], "CLEAN_FOR_GRANTS")
 
     def test_registry_lifecycle_releases_anchors_and_invalidates_grants(self):
@@ -871,6 +1229,18 @@ class ChildProcessTests(unittest.TestCase):
             "grant_by_declaration": "BootRefused:declaration_refused",
             "grants_pop": "AttributeError"})
         self.assertEqual(result["stages"][-1]["verdict"], "CLEAN_FOR_GRANTS")
+
+    def test_real_collection_of_kernel_objects_keeps_kind_and_target_coherent(self):
+        result = run_child([*CLEAN_STD, "kernel_objects", "eval"])
+        report = result["stages"][-1]
+        self.assertNotIn("reason", report)                    # não foi recusado
+        B.check_boot_report(report)                           # coerente de ponta a ponta
+        kinds = {e["kind"] for e in report["entries"]}
+        self.assertLessEqual({"anon_inode", "socket", "fifo"}, kinds)
+        for e in report["entries"]:
+            self.assertEqual(B._target_state(e["kind"], e["target"]), "ok", e)
+        self.assertTrue(all(e["status"] == "unknown" for e in report["entries"]
+                            if e["kind"] in ("anon_inode", "socket")))
 
     def test_real_inventory_is_cross_checked_and_never_claims_completeness(self):
         report = final(CLEAN_STD)
@@ -989,6 +1359,111 @@ class ChildMixedTests(unittest.TestCase):
             self.assertEqual((step, report["verdict"], report["reason"]),
                              (step, "REFUSED", reason))
             self.assertIs(report["bootstrap_trusted"], False)
+
+
+class ChildFaultTests(unittest.TestCase):
+    """P2-01: falhas injetadas em CADA etapa das fábricas, num filho real, com o
+    conjunto real de FDs abertos e o estado do registro verificados."""
+
+    # pontos de falha que afetam make_pipe, com a n-ésima ocorrência
+    PIPE_POINTS = [("anchor", 1), ("anchor", 2), ("created", 1), ("created", 2),
+                   ("pending", 1), ("pending", 2), ("grant", 1), ("grant", 2),
+                   ("grants", 1), ("grants", 2), ("issued", 1), ("issued", 2),
+                   ("owned", 1), ("owned", 2)]
+    PLACE_POINTS = [("anchor", 1), ("created", 1), ("pending", 1), ("grant", 1),
+                    ("grants", 1), ("issued", 1), ("owned", 1)]
+
+    def assert_clean_registry(self, out, label):
+        self.assertEqual(out["state"], {"grants": 0, "issued": 0, "pending": 0, "owned": 0},
+                         label)
+        self.assertEqual(out["retry_state_before"], {"grants": 0, "owned": 0}, label)
+        # nada concedido por engano: a falha não deixou capacidade autorizada
+        # (a tentativa seguinte, sem falha, é o único dono dos grants)
+        self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                              "closed": True}, label)
+
+    def test_positive_controls(self):
+        for factory in ("pipe", "place"):
+            out = run_fault(factory, "none")
+            self.assertEqual(out["exc"], "NO_ERROR", factory)
+            self.assertEqual(out["retry"], "ok", factory)
+            grants = 2 if factory == "pipe" else 1
+            self.assertEqual(out["state"], {"grants": grants, "issued": grants,
+                                            "pending": 0, "owned": grants}, factory)
+            self.assertEqual(len(out["after"]) - len(out["before"]), 2 * grants
+                             if factory == "pipe" else 1, factory)   # FDs + âncoras
+            self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                  "closed": True})
+
+    def test_make_pipe_failure_at_every_step_is_all_or_nothing(self):
+        for where, nth in self.PIPE_POINTS:
+            label = "pipe/%s/%d" % (where, nth)
+            out = run_fault("pipe", where, nth)
+            self.assertEqual(out["exc"], "Boom", label)
+            self.assertEqual(out["after"], out["before"], label)      # nenhum FD vazou
+            self.assert_clean_registry(out, label)
+            self.assertEqual(out["retry"], "ok", label)               # registro reutilizável
+            self.assertEqual(out["retry_state"]["grants"], 2, label)
+            self.assertEqual(out["retry_state"]["owned"], 2, label)
+            self.assertEqual(out["retry_state"]["pending"], 0, label)
+
+    def test_place_devnull_failure_at_every_step_leaves_nothing_behind(self):
+        for slot in ("open", "closed"):
+            for where, nth in self.PLACE_POINTS:
+                label = "place/%s/%s/%d" % (slot, where, nth)
+                out = run_fault("place", where, nth, slot=slot)
+                self.assertEqual(out["exc"], "Boom", label)
+                # slot aberto: continua aberto (residual documentado); fechado: volta a fechado
+                self.assertEqual(out["after"], out["before"], label)
+                self.assert_clean_registry(out, label)
+                self.assertEqual(out["retry"], "ok", label)
+                self.assertEqual(out["retry_state"], {"grants": 1, "issued": 1,
+                                                      "pending": 0, "owned": 1}, label)
+
+    def test_failure_after_first_issue_revokes_it_and_closes_each_anchor_once(self):
+        for where in ("grant", "grants", "issued", "owned"):
+            out = run_fault("pipe", where, 2)
+            label = "second/" + where
+            self.assertEqual(out["after"], out["before"], label)
+            self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])), label)
+            # âncora 1 (registrada), âncora 2, leitura e escrita: 4 closes, 4 números
+            self.assertEqual(len(out["closed_log"]), 4, label)
+            self.assert_clean_registry(out, label)
+
+    def test_a_number_reused_between_two_closes_is_never_closed_again(self):
+        # Um FD novo assume o número recém-liberado após CADA close. Se o código
+        # fechasse um mesmo número duas vezes, fecharia o FD novo.
+        for factory, points in (("pipe", self.PIPE_POINTS), ("place", self.PLACE_POINTS)):
+            for where, nth in points:
+                label = "interpose/%s/%s/%d" % (factory, where, nth)
+                out = run_fault(factory, where, nth, interpose=True)
+                self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])), label)
+                # a interposição realmente ocorreu em cada close, e nada a fechou depois
+                self.assertEqual(out["interposed"], out["closed_log"], label)
+                self.assertEqual(out["interposed_open"], sorted(set(out["interposed"])), label)
+                self.assertEqual(out["state"], {"grants": 0, "issued": 0, "pending": 0,
+                                                "owned": 0}, label)
+
+    def test_close_releases_each_anchor_once_and_is_idempotent(self):
+        for factory, anchors in (("pipe", 4), ("place", 1)):   # a repetição reaproveita o slot
+            out = run_fault(factory, "none", interpose=True)
+            self.assertEqual(out["exc"], "NO_ERROR", factory)
+            # duas chamadas a close(): cada âncora é fechada uma única vez e o FD novo
+            # que assumiu o número liberado nunca é fechado
+            self.assertEqual(len(out["close_log"]), anchors, factory)
+            self.assertEqual(len(set(out["close_log"])), anchors, factory)
+            self.assertEqual(out["close_interposed"], sorted(out["close_log"]), factory)
+            self.assertEqual(out["close_interposed_open"], out["close_interposed"], factory)
+            self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                  "closed": True}, factory)
+
+    def test_closed_registry_is_refused_and_has_no_authorized_fd(self):
+        result = run_child([*CLEAN_STD, "pipe", "eval", "shutdown_registry", "eval"])
+        self.assertEqual(result["stages"][0]["verdict"], "CLEAN_FOR_GRANTS")      # controle
+        final_report = result["stages"][-1]
+        self.assertEqual((final_report["verdict"], final_report["reason"]),
+                         ("REFUSED", "registry_closed"))
+        self.assertEqual(result["notes"]["grants_after_close"], 0)
 
 
 if __name__ == "__main__":
