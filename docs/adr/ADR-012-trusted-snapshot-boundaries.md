@@ -1,6 +1,6 @@
 # ADR-012 — Fronteiras de confiança para snapshot e supervisor (GH-F1.18)
 
-**Status:** proposta, **somente documental** (PR-A da GH-F1.18; 25/10/2026; revisada após a primeira auditoria Codex, ver seção 16). Esta ADR registra decisões arquiteturais propostas para uma arquitetura **experimental**. Nada aqui está implementado. `STRONG=UNAVAILABLE` e `readiness=BLOCKED` permanecem invariantes; nenhuma flag de autorização muda (`agent_execution_authorized`, `file_operations_authorized`, `cloud_call_authorized`, `data_transfer_authorized` seguem `false`). **A aprovação desta ADR não desbloqueia a execução de agentes.** A auditoria independente do Codex sobre o HEAD corrigido está **pendente**. Os componentes das seções 6, 7, 9 e 11 são propostas, não funcionalidades.
+**Status:** proposta, **somente documental** (PR-A da GH-F1.18; 25/10/2026; revisada após duas auditorias Codex, ver seção 16). Esta ADR registra decisões arquiteturais propostas para uma arquitetura **experimental**. Nada aqui está implementado. `STRONG=UNAVAILABLE` e `readiness=BLOCKED` permanecem invariantes; nenhuma flag de autorização muda (`agent_execution_authorized`, `file_operations_authorized`, `cloud_call_authorized`, `data_transfer_authorized` seguem `false`). **A aprovação desta ADR não desbloqueia a execução de agentes.** A terceira auditoria independente do Codex, sobre o HEAD corrigido, está **pendente**. Os componentes das seções 6, 7, 9 e 11 são propostas, não funcionalidades.
 
 ## 0. Vocabulário de evidência
 
@@ -29,7 +29,7 @@ A GH-F1.13 a F1.17 produziram, em fixtures sintéticas, evidências experimentai
 
 Causa comum: o toolkit tenta obter, por verificações dentro de um processo que **compartilha UID** com os demais escritores, propriedades que só poderiam vir de uma fronteira construída pelo kernel em volta dos agentes ou de uma primitiva de captura atômica. Mais leituras ou hashes reduzem janelas, mas não as fecham.
 
-**Ambiente informado pelo proprietário (25/10/2026), não comprovado como capacidade de segurança:** `findmnt -T /home/arthur/Projetos -no FSTYPE` → `ext4`; `stat -f -c '%T'` → `ext2/ext3` (nome que o `stat` usa para a família ext); `uname -r` → `7.2.4-arch1-2`. Isto descreve o ambiente do MVP e **não** estabelece que reflink, snapshot atômico de árvore ou fs-verity estejam disponíveis: tais capacidades dependem do sistema de arquivos e das opções efetivas e devem ser verificadas por teste. Nenhuma suposição sobre o sistema de arquivos de outras máquinas é feita a partir do checkout em nuvem.
+**Ambiente informado pelo proprietário (25/10/2026), não comprovado como capacidade de segurança:** Arch Linux; filesystem `ext4` (o `stat -f` do proprietário reporta o nome de família `ext2/ext3`); kernel `7.2.4-arch1-2`. Isto descreve o ambiente do MVP e **não** estabelece que reflink, snapshot atômico de árvore ou fs-verity estejam disponíveis: tais capacidades dependem do filesystem e das opções efetivas e devem ser verificadas por teste. Nenhuma suposição sobre o filesystem de outras máquinas é feita a partir do checkout em nuvem.
 
 ## 2. Objetivo de segurança do Toolkit
 
@@ -74,10 +74,12 @@ Proprietário (confirmação interativa)   ← confiança humana
    → Snapshot Store                     ← dado selado e reverificável; não é imutável contra A3
    → Célula isolada (SRT/bwrap, ...)    ← A1; objetivo: sem rede e sem acesso à origem (NOT_VERIFIED)
    → ChangeSet                          ← dado fechado; nunca patch executável
-   → Apply Gate                         ← processo separado; único caminho de escrita na origem, com aprovação humana
+   → Apply Gate                         ← processo separado; único caminho concedido às alterações originadas pela célula, com aprovação humana
 ```
 
-Objetivo: cada seta transporta **dados**, nunca capacidades (sem fds, caminhos vivos ou comandos); isso é um requisito a testar, não um fato. O supervisor não confia em: conteúdo da pasta, nomes, symlinks, `.git` e configurações internas, saída da célula, JSON produzido por qualquer agente. A identidade de uma pasta (seção 7.2) **não** equivale a autorização autenticada nem exclui escritores do mesmo UID.
+**O que cruza uma fronteira.** Uma fronteira pode transportar (a) **dados serializados** ou (b) **capacidades explicitamente autorizadas e inventariadas**. São capacidades, e não simples dados: descritores de arquivo, montagens (inclusive bind mounts), sockets e canais IPC, o diretório de trabalho herdado, o terminal controlador e, por consequência, qualquer descritor passado por `SCM_RIGHTS`. Dados de configuração como variáveis de ambiente influenciam o comportamento do processo e entram no inventário. Nada atravessa por herança implícita. Cada capacidade concedida à célula deve constar de um inventário com identidade e finalidade; o que não consta é negado. Isto é um **requisito arquitetural futuro, `NOT_VERIFIED`**.
+
+O Apply Gate é o **único caminho concedido às alterações originadas pela célula**; ele **não** é o único caminho de escrita na origem: A2 e A3 continuam capazes de alterar a origem por caminhos externos. O supervisor não confia em: conteúdo da pasta, nomes, symlinks, `.git` e configurações internas, saída da célula, JSON produzido por qualquer agente. A identidade de uma pasta (seção 7.2) **não** equivale a autorização autenticada nem exclui escritores do mesmo UID.
 
 ## 5. Arquiteturas candidatas e comparação
 
@@ -108,32 +110,40 @@ Esta arquitetura **não elimina ABA**, **não demonstra isolamento** e **não ha
 
 ## 7. Contratos conceituais dos componentes (propostas, nada implementado)
 
-### 7.1 Supervisor: protocolo de bootstrap (futuro)
+### 7.1 Supervisor e células: requisitos de bootstrap, capacidades e ciclo de vida (futuros)
 
-Estado atual: nenhuma dessas etapas existe no código. A premissa de que apenas descritores acima de 2 seriam perigosos é **incorreta**: os descritores 0, 1 e 2 também podem referenciar capacidades sensíveis (sockets, arquivos, diretórios, terminais, pipes de outros processos). Protocolo proposto, a implementar e testar:
+Estado atual: nenhum dos requisitos abaixo está implementado ou testado de forma geral (o launcher atual constrói o ambiente do zero apenas para os canários sintéticos). **Todas as propriedades a seguir permanecem `NOT_VERIFIED`.** Nenhum mecanismo isolado resolve o conjunto; cada item exige implementação e testes positivos e negativos próprios. A premissa de que apenas descritores acima de 2 seriam perigosos é incorreta: 0, 1 e 2 também podem referenciar capacidades sensíveis (sockets, arquivos, diretórios, terminais, pipes de outros processos).
 
-1. **Processo inicial monothread**, antes de iniciar threads, importar módulos de terceiros ou abrir recursos; executado com Python em modo isolado (`-I`).
-2. **Inventário de todos os fds herdados** (incluindo 0–2) a partir de uma fonte verificada (por exemplo `/proc/self/fd` ou `close_range`), registrando tipo, destino e flags; qualquer entrada não prevista pela allowlist é recusada ou fechada.
-3. **Validação ou substituição segura de stdin/stdout/stderr:** verificar que cada um é um terminal, pipe ou arquivo esperado e não um diretório, socket ou objeto inesperado; quando não for, substituir por descritores abertos pelo próprio supervisor (por exemplo `/dev/null`) antes de qualquer outro passo.
-4. **Fechamento dos descritores não autorizados** e uso de `CLOEXEC` por padrão em tudo que o supervisor abrir.
-5. **Allowlist explícita por processo filho:** cada filho recebe somente os fds nomeados para ele; nenhuma herança implícita.
-6. **Canais IPC e recebimento posterior de fds:** o supervisor não aceita fds nem números de fd por argumento, ambiente ou arquivo; passagem posterior de descritores (por exemplo `SCM_RIGHTS`) só por canal explicitamente criado, com tipo e destino verificados no recebimento.
-7. **Limitações conhecidas:** SRT e Landlock **não restringem descritores já abertos** antes da aplicação da restrição (Landlock: "files opened before sandboxing are not restricted"; direitos ficam associados ao fd e permanecem se o fd é repassado); portanto o inventário e o fechamento precisam ocorrer **antes** de lançar a célula. O comportamento do SRT com fds herdados não foi verificado.
-8. Demais hardening: `PR_SET_NO_NEW_PRIVS` (irreversível, herdado por filhos e preservado em `execve`), recusa de `euid==0`. `PR_SET_DUMPABLE=0` é hardening limitado (seção 3.1).
+1. **Capacidades.** FDs, mounts, sockets e canais IPC são capacidades (seção 4), não dados. Cada processo recebe somente as listadas num inventário de concessão.
+2. **Ambiente.** Todo processo (supervisor e células) inicia com ambiente construído **por allowlist a partir de ambiente vazio**; nenhuma variável é herdada por omissão. O ambiente passado a `execve` é o `envp` explícito.
+3. **Diretório de trabalho.** O `cwd` é definido explicitamente (por exemplo `fchdir` a um descritor validado) para um diretório **dentro da fronteira autorizada** da célula; nunca herdado.
+4. **FDs 0, 1 e 2.** São substituídos por endpoints **criados ou validados pelo supervisor**, com identidade e finalidade definidas (por exemplo `/dev/null` aberto pelo supervisor, ou um pipe criado por ele para captura de saída). Nota de documentação: `dup`/`dup2` fazem o novo descritor compartilhar a *open file description* (offset e flags de status) com o original e deixam `FD_CLOEXEC` desligado, o que é necessário para 0–2 atravessarem `execve`, mas significa que duplicar um descritor sensível propaga a sua autoridade; por isso o endpoint deve ser criado, não duplicado de um descritor herdado.
+5. **Terminal controlador.** É uma capacidade. Proposta: o filho chama `setsid()` para iniciar **nova sessão sem terminal controlador** (a chamada falha com `EPERM` se o chamador for líder de grupo; usar `fork` e chamar no filho), e terminais são abertos com `O_NOCTTY` para não adquirir um controlador por acidente. A mitigação de `TIOCSTI` segue a documentação do bubblewrap: sem filtro seccomp de `TIOCSTI` é preciso `--new-session`; o man do kernel registra que desde o Linux 6.2 `TIOCSTI` pode exigir `CAP_SYS_ADMIN` **somente** quando o sysctl `dev.tty.legacy_tiocsti` é falso, sem informar o padrão. Portanto não se depende do padrão do sistema.
+6. **Inventário de FDs.** Feito por mecanismo apropriado, como a leitura de `/proc/self/fd` (tipo e destino de cada entrada), executada em processo monothread e com `/proc` verificado. **`close_range` não realiza inventário**: retorna apenas sucesso ou erro; a própria página do man usa `/proc/self/fd` para listar descritores.
+7. **Fechamento.** `close_range` pode fechar descritores ou marcá-los `CLOEXEC` (`CLOSE_RANGE_CLOEXEC`, Linux 5.11), e `CLOSE_RANGE_UNSHARE` desassocia a tabela de descritores antes de fechar, evitando corridas com threads que a compartilham (Linux 5.9 / glibc 2.34 para a chamada). Isso **não substitui uma política de allowlist**: é a ferramenta para aplicá-la.
+8. **Preservação sem herança acidental.** Procedimento conceitual: abrir tudo com `O_CLOEXEC` (essencial em programas com threads, segundo `open(2)`); no filho, após `fork`, posicionar os descritores autorizados em números definidos (por exemplo com `dup3` e `O_CLOEXEC` onde não devam sobreviver ao `exec`, ou limpando `FD_CLOEXEC` somente nos que devam), marcar o restante `CLOEXEC`/fechar com `close_range` e só então executar. Os números e flags finais são verificados por reinventário (item 9).
+9. **Revalidação imediatamente antes de cada `execve`.** O filho reinventaria `/proc/self/fd` e compara com a allowlist; qualquer divergência aborta. Lembrete: descritores sem `CLOEXEC` atravessam `execve`, e bits set-user-ID/capabilities são ignorados com `no_new_privs`.
+10. **IPC e `SCM_RIGHTS`.** **Proibidos por padrão.** Quando autorizados: canal `AF_UNIX` criado pelo supervisor (par de sockets), nunca socket por caminho ou abstrato acessível a terceiros (o man de `unix(7)` avisa que permissões de arquivo de socket não devem ser base de segurança, e que sockets abstratos independem de permissões de arquivo); `SO_PEERCRED` informa apenas credenciais no momento do `connect`/`socketpair` e não autentica propósito; descritores recebidos referenciam a mesma *open file description* do remetente, portanto carregam a autoridade completa; cada descritor recebido é validado (tipo, `fstat`/identidade, flags) antes do uso e os inesperados são fechados; limite de quantidade (o man informa 253 por mensagem em kernels atuais). Se `MSG_CMSG_CLOEXEC` está disponível para o recebimento não foi confirmado nas páginas consultadas (hipótese).
+11. **Ciclo de vida.** Filhos e descendentes permanecem sob a fronteira correspondente e são encerrados em conjunto com o pai: o supervisor mantém a sessão e o grupo de processos da célula e os encerra no término ou no timeout (o launcher atual faz isso para os canários). Um descendente pode escapar de um grupo de processos (`setsid`, dupla bifurcação); contê-lo exige um mecanismo adicional (por exemplo namespace de PIDs, que o bubblewrap oferece com `--unshare-pid`, ou controle por cgroup), cuja suficiência **não foi verificada**.
+12. **Limites do SRT e do Landlock para descritores preexistentes.** O Landlock não restringe arquivos abertos antes da restrição e mantém os direitos associados ao descritor mesmo quando repassado; portanto o inventário e o fechamento têm de ocorrer **antes** de aplicar a restrição ou lançar a célula. No README do SRT v0.0.81 o único tratamento visível de descritores herdados é o `--control-fd`, que o comando isolado recebe como `/dev/null`; **não encontrei afirmação geral sobre herança de descritores**, logo o comportamento do SRT com fds preexistentes é `NOT_VERIFIED`.
+13. **Demais hardening.** `PR_SET_NO_NEW_PRIVS` (irreversível, herdado por filhos e preservado em `execve`); recusa de `euid==0`; `PR_SET_DUMPABLE=0` é hardening limitado (seção 3.1).
 
 ### 7.2 Raiz confiável e identidade
 
-O supervisor abre a pasta ele mesmo, a partir de `/`, componente a componente com `openat2` (`RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, `RESOLVE_NO_XDEV`; `RESOLVE_BENEATH` quando houver `dirfd` ancorado). Registra, **somente quando a máscara efetivamente retornada pelo `statx` (`stx_mask`) indicar que o campo foi preenchido**, `dev`, `ino` e identificador de montagem. Campos ausentes ⇒ identidade parcial declarada como tal, nunca preenchida por suposição.
+O supervisor abre a pasta ele mesmo, a partir de `/`, componente a componente com `openat2` (`RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, `RESOLVE_NO_XDEV`; `RESOLVE_BENEATH` quando houver `dirfd` ancorado). Depois disso o contrato opera **preferencialmente sobre o `root_fd` já aberto**, sem nova resolução por pathname.
 
-**Identidade de montagem.** Distinguir:
-- `STATX_MNT_ID` (Linux 5.8): identificador da montagem que contém o arquivo; coincide com o primeiro campo de `/proc/self/mountinfo` e com o retornado por `name_to_handle_at(2)`. A documentação não o descreve como único nem diz se pode ser reutilizado.
-- `STATX_MNT_ID_UNIQUE` (Linux 6.8): identificador que a documentação diz "garantido de não ser reutilizado enquanto o sistema está em execução"; é o usado por `listmount(2)`/`statmount(2)`.
-- A **máscara efetivamente retornada** pode diferir da solicitada; o campo só vale se o bit correspondente estiver ligado.
-- A documentação consultada **não trata do escopo por mount namespace**; a validade de um identificador fora do namespace em que foi observado não é afirmada. Registrar também o namespace observado (por exemplo o link de `/proc/self/ns/mnt`) como contexto, sem tratá-lo como autenticação.
+**Obtenção de metadados.** `fstat(fd)` e `statx(fd, "", AT_EMPTY_PATH, mask, &stx)` são chamadas distintas: com `AT_EMPTY_PATH` e caminho vazio, `statx` opera sobre o arquivo referido pelo `fd` (o `fd` pode ser de qualquer tipo, inclusive `O_PATH`; caminho `NULL` apenas desde o Linux 6.11) e é a única via documentada que informa o identificador de montagem e uma **máscara** de campos preenchidos (`stx_mask`). A comparação de qualquer valor com uma observação anterior é apenas isso: igualdade de metadados.
 
-Esses campos ajudam a **comparar** o objeto e a montagem observados agora com os observados antes. **Não permitem recuperar ou autenticar um objeto histórico**, não autenticam o proprietário e não excluem escritores do mesmo UID. Por isso a reabertura é descrita como: *reabrir a pasta por caminho e comparar a identidade atual com a registrada*, e qualquer divergência, ou ausência de campo, resulta em recusa.
+**Campos exigidos (requisitos mínimos escolhidos):**
+- `STATX_INO` ligado em `stx_mask` (faz parte de `STATX_BASIC_STATS`). A máscara retornada pode diferir da solicitada: o kernel pode omitir campos pedidos ou preencher campos não pedidos, e um campo só vale se o bit correspondente estiver ligado.
+- Dispositivo: `stx_dev_major`/`stx_dev_minor` **não têm bit próprio** na documentação consultada (não existe `STATX_DEV`), e a página também não afirma que sejam sempre preenchidos; esta ADR não exige um bit inexistente. O contrato compara o dispositivo com o obtido por `fstat` e **recusa** se houver inconsistência; o comportamento empírico será verificado no PR-B.
+- Identificador de montagem: preferir `STATX_MNT_ID_UNIQUE` (Linux 6.8; a página o descreve como não reutilizado enquanto o sistema está em execução); aceitar `STATX_MNT_ID` (Linux 5.8; a página não diz se pode ser reutilizado) somente se o bit correspondente estiver ligado. **Registrar qual variante foi obtida** (`unique`, `legacy` ou `ausente`); valores de variantes diferentes não são comparáveis entre si. Variante ausente ⇒ identidade parcial ⇒ **recusa**.
+- Os campos de **uma mesma estrutura `statx` não formam um snapshot atômico**: a documentação diz que campos diferentes podem refletir momentos diferentes. Reobservar e comparar não elimina a corrida.
+- Escopo por mount namespace: a documentação consultada não o trata. Registrar o namespace observado (por exemplo o link de `/proc/self/ns/mnt`) apenas como contexto; nada autoriza supor validade de um identificador fora do namespace em que foi observado.
 
-**`RESOLVE_NO_XDEV` e pontos de montagem.** A flag recusa qualquer travessia de ponto de montagem, **inclusive bind mounts legítimos**, com `EXDEV`; a documentação alerta que o uso amplo pode gerar erros espúrios em sistemas onde bind mounts são comuns (por exemplo uma pasta de projeto que contém um subdiretório montado, ou um caminho que passa por uma montagem). Decisão proposta: **manter a recusa por padrão** e documentar essa limitação como recusa legítima, não como defeito. Qualquer futura permissão para atravessar montagens exige âncoras explicitamente autorizadas pelo proprietário e verificação explícita (identidade da montagem, tipo de filesystem, destino); `NO_XDEV` **não será relaxado silenciosamente**.
+Esses campos ajudam a **comparar** o objeto e a montagem observados agora com os observados antes. **Igualdade de metadados não é autenticidade da origem**: não autentica o proprietário, não recupera objeto histórico e não exclui escritores do mesmo UID. A reabertura é descrita como *reabrir a pasta e comparar a identidade atual com a registrada*; divergência, ou requisito mínimo não atendido, resulta em recusa.
+
+**`RESOLVE_NO_XDEV` e pontos de montagem.** A flag recusa qualquer travessia de ponto de montagem, **inclusive bind mounts legítimos**, com `EXDEV`; a documentação alerta que o uso amplo pode gerar erros espúrios onde bind mounts são comuns (por exemplo uma pasta de projeto que contém um subdiretório montado). Decisão proposta: **manter a recusa por padrão** e tratá-la como recusa legítima. Qualquer futura permissão para atravessar montagens exige âncoras explicitamente autorizadas pelo proprietário e verificação explícita (identidade da montagem, tipo de filesystem, destino); `NO_XDEV` **não será relaxado silenciosamente**.
 
 ### 7.3 Concessão do proprietário (futura)
 
@@ -151,24 +161,35 @@ Produz `SnapshotHandle` com identificador, digest do manifesto, nível de consis
 
 ### 7.6 Célula isolada
 
-Extensão futura de `srt_launcher`: vê somente a cópia do store, por montagem somente leitura, mais área de trabalho separada; objetivo: sem rede e sem acesso à origem. `NOT_VERIFIED`: depende de inventário de capacidades (versões de SRT 0.0.81 e bubblewrap 0.12.0, seccomp, user namespaces) e de testes positivos e negativos em cada ambiente.
+Extensão futura de `srt_launcher`: vê somente a cópia do store, por montagem somente leitura, mais área de trabalho separada; objetivo: sem rede e sem acesso à origem. **Montagens são capacidades**: um bind mount concede acesso a objetos do filesystem. Um bind mount somente leitura restringe escritas *por aquele caminho de montagem*, mas **não congela o backing store**: um escritor externo (A2 ou A3) pode continuar alterando o conteúdo por outro caminho que lhe seja acessível, e o que a célula lê pode mudar durante a execução. Montagem somente leitura **não equivale a snapshot imutável**; a independência vem da cópia feita pela captura (seção 7.4) e continua sujeita à seção 8. O inventário da célula deve cobrir montagens, descritores, IPC, ambiente, `cwd`, terminal controlador e demais capacidades (seção 7.1). A célula e sua proteção permanecem `NOT_VERIFIED`: dependem de inventário de capacidades (versões SRT 0.0.81 e bubblewrap 0.12.0, seccomp, user namespaces) e de testes positivos e negativos em cada ambiente.
 
 ### 7.7 ChangeSet
 
-Esquema fechado `{op, path, base_digest, new_digest}` + blobs; proibidos por padrão symlink, hardlink, dispositivos, mudança de modo além do bit executável e caminhos protegidos (`.git/**`, `.claude/**`, `.mcp.json`, rc de shell, definições de CI).
+Esquema fechado `{op, path, base_digest, new_digest}` + blobs (dado serializado, não capacidade); proibidos por padrão symlink, hardlink, dispositivos, mudança de modo além do bit executável e caminhos protegidos (`.git/**`, `.claude/**`, `.mcp.json`, rc de shell, definições de CI).
 
 ### 7.8 Apply Gate
 
-Processo separado, sem agente; exibe o diff; exige aprovação humana vinculada a `hash(changeset, manifesto-base, identidade atual comparada)` com expiração e sem reutilização. A aplicação **não** forma, em geral, uma operação *compare-and-swap* atômica: comparar `base_digest` e depois executar `rename` são duas etapas separadas, com janela entre elas. `renameat2` documenta apenas operações de nomes: `RENAME_NOREPLACE` falha se o destino já existe e `RENAME_EXCHANGE` troca nomes de forma atômica; nenhum deles verifica conteúdo esperado. Tratamento por tipo de operação:
+Processo separado, sem agente; é o único caminho concedido às alterações originadas pela célula (A2 e A3 continuam podendo alterar a origem por caminhos externos). Exibe o diff; exige aprovação humana vinculada a `hash(changeset, manifesto-base, identidade atual comparada)` com expiração e sem reutilização.
 
-| Operação | Mecanismo proposto | Garantia | Estado |
+**Limites que valem para todas as operações:**
+- Comparar `base_digest` e depois realizar uma mutação **não é compare-and-swap atômico**: são etapas separadas, com janela entre elas.
+- Divergência observada **antes** da mutação ⇒ recusa ou conflito.
+- Divergência que surja **depois** da verificação pode não ser percebida antes da operação.
+- Atualizações, remoções e alterações de permissões podem atingir conteúdo ou objetos **diferentes** dos aprovados.
+- Verificação posterior é **detecção após a mutação**: não é garantia de reversão, de transação nem de ausência de perda.
+- `renameat2` documenta apenas operações de nomes. `RENAME_NOREPLACE` falha se o destino já existe e é útil para **criação** de destino inexistente; não resolve CAS de conteúdo de arquivo existente. `RENAME_EXCHANGE` troca nomes atomicamente, mas **também não resolve, sozinho, atualização condicional de conteúdo**: nenhuma das flags compara conteúdo.
+- Não se projeta aqui nenhum mecanismo transacional; isso exigiria exclusão de escritores ou fronteira adicional, ainda inexistentes.
+
+| Operação | Mecanismo conceitual | O que se pode dizer | Estado |
 |---|---|---|---|
-| **Criar arquivo novo** | arquivo temporário completo no mesmo diretório + `renameat2(RENAME_NOREPLACE)` | não substitui um destino que já exista no instante da chamada | `NOT_VERIFIED` até teste |
-| **Atualizar arquivo existente** | comparar identidade/`base_digest`, escrever temporário, trocar | **sem exclusão de escritores, a atualização condicional não é atômica**: um escritor concorrente pode alterar o arquivo entre a comparação e a troca; `RENAME_NOREPLACE` não resolve este caso (o destino existe por definição) e `RENAME_EXCHANGE` só troca nomes | **`NOT_VERIFIED`; sem promessa de ausência de sobrescrita concorrente**; reduzir a janela e **detectar após o fato** (reverificar o conteúdo trocado, preservar o original para reversão) |
-| **Remover** | verificar identidade, `unlinkat` | `unlinkat` não verifica conteúdo; pode remover versão diferente da revisada | `NOT_VERIFIED`; mesma ressalva |
-| **Alterar permissões** | verificar identidade, `fchmodat` por fd | pode atingir objeto diferente do revisado se o nome foi trocado; usar fd aberto e verificado | `NOT_VERIFIED` |
+| **Criar arquivo novo** | arquivo temporário completo no mesmo diretório + `renameat2(RENAME_NOREPLACE)` | recusa se o nome de destino já existir no instante da chamada (conflito) | `NOT_VERIFIED` até teste |
+| **Atualizar arquivo existente** | comparar identidade/`base_digest`, preparar substituto, trocar | janela entre comparação e troca; um escritor concorrente pode alterar o arquivo no intervalo. Se `RENAME_EXCHANGE` for usado, o objeto deslocado pode ser examinado depois e uma divergência é **detectada após a mutação**, sem garantia de reversão | **`NOT_VERIFIED`** |
+| **Remover** | verificar identidade, `unlinkat` | `unlinkat` não verifica conteúdo; pode remover objeto diferente do revisado | **`NOT_VERIFIED`** |
+| **Alterar permissões** | abrir o arquivo (sem `O_PATH`), validar identidade no descritor e usar `fchmod(fd, modo)` | `fchmod` atua diretamente no arquivo referido pelo descritor, o que reduz o risco de troca de nome entre verificação e uso, mas **não resolve** conflito com o conteúdo aprovado. Um descritor `O_PATH` não serve a `fchmod` (`EBADF`, segundo `open(2)`) | **`NOT_VERIFIED`** |
 
-O Apply Gate permanece **`NOT_VERIFIED` para qualquer operação que exija exclusão de escritores ou semântica transacional**, até existir mecanismo demonstrado (por exemplo exclusão de escritores por fronteira adicional ou um procedimento com prova). Em caso de divergência detectada, o resultado é conflito, nunca sobrescrita silenciosa. O Apply Gate também não executa `git` na origem do usuário (configuração, hooks e filtros do repositório podem executar código).
+**`fchmod` × `fchmodat`.** `fchmod(fd, modo)` atua no arquivo referido pelo descritor. `fchmodat(dirfd, path, ..., flags)` normalmente envolve resolução do caminho relativo a `dirfd`. `fchmodat` com caminho vazio e `AT_EMPTY_PATH` é suportado pelo kernel somente desde o Linux 6.6 segundo o man e depende de suporte de libc; `AT_SYMLINK_NOFOLLOW` tem histórico próprio (glibc 2.32, Linux 6.5). Qualquer uso de `fchmodat` exige verificação de suporte no ambiente antes; o desenho conceitual prefere `fchmod` sobre descritor aberto e validado.
+
+O Apply Gate permanece **`NOT_VERIFIED` para qualquer operação que exija exclusão de escritores ou semântica transacional**. O Apply Gate também não executa `git` na origem do usuário (configuração, hooks e filtros do repositório podem executar código).
 
 ## 8. Limitações de detecção e atomicidade
 
@@ -181,7 +202,7 @@ O Apply Gate permanece **`NOT_VERIFIED` para qualquer operação que exija exclu
 - overflow da fila (`IN_Q_OVERFLOW`, limitado por `max_queued_events`), limites `max_user_watches`/`max_user_instances`, observação **não recursiva** (subdiretório novo pode já conter arquivos antes de o watch ser instalado), correspondência racy de `IN_MOVED_FROM`/`IN_MOVED_TO`, coalescência de eventos idênticos e impossibilidade de identificar o autor do evento;
 - limitações do filesystem e das opções de montagem.
 
-Não se afirma que `ctime` elimina ou sempre detecta ABA. A hipótese de que `ctime` não é definível pelo usuário comum e por isso torna detectável um subconjunto de A→B→A feito por `write()`/`truncate()` **não foi verificada em documentação nesta rodada** e deve ser **medida** no ambiente (PR-C), reportada como resultado experimental com resíduos. Um hash descreve os bytes lidos, não a estabilidade entre leituras.
+Não se afirma que `ctime` elimina ou sempre detecta ABA. A hipótese de que `ctime` não é definível pelo usuário comum e por isso torna detectável um subconjunto de A→B→A feito por `write()`/`truncate()` **não está confirmada pela documentação consultada** (`inode(7)` diz que `ctime` muda com escrita ou alteração de metadados e cita `utime` só para atime/mtime, sem afirmar que o usuário não possa defini-lo) e deve ser **medida** no ambiente (PR-C), reportada como resultado experimental com resíduos. Um hash descreve os bytes lidos, não a estabilidade entre leituras.
 
 ### 8.2 Atomicidade
 
@@ -216,7 +237,7 @@ Nomes só podem ser usados com estes significados. Cada degrau é um **objetivo 
 - **P0** raiz identificada pelo supervisor (campos de identidade efetivamente disponíveis, comparados agora);
 - **P1** captura recusada quando há evidência de instabilidade (detecção sujeita à seção 8);
 - **P2** snapshot independente, arquivos regulares com `nlink==1`, selado e reverificável;
-- **P3** objetivo: célula sem acesso à origem nem a store gravável (propriedade testável com controles positivo e negativo);
+- **P3** objetivo: célula sem acesso à origem nem a store gravável, com inventário completo de capacidades (propriedade testável com controles positivo e negativo; montagem somente leitura não equivale a snapshot imutável);
 - **P4** changeset verificado com aprovação humana vinculada (sem promessa de atomicidade da aplicação, seção 7.8);
 - **P5** (opcional) captura atômica, somente com backend sondado;
 - **P6** (opcional) conteúdo do store protegido por mecanismo do filesystem.
@@ -227,16 +248,18 @@ Nomes só podem ser usados com estes significados. Cada degrau é um **objetivo 
 
 **Resultados de corrida.** Um número finito de execuções sem falhas **não** constitui prova matemática de ausência de ABA. Todo relatório de corrida deve declarar: quantidade de execuções, condições (kernel, filesystem, opções de montagem, carga, estratégia do escritor), resultados observados (inclusive aceitações inconsistentes e recusas), limitações e resíduos desconhecidos. Resultados experimentais são distinguidos de garantias.
 
-**Recusa:** kernel ou syscall necessária ausente; filesystem não suportado ou não verificado; qualquer fd não previsto na allowlist (inclusive 0–2); travessia de montagem não autorizada (`EXDEV`); campo de identidade ausente na máscara retornada; instabilidade observada além do limite de tentativas; inotify indisponível, com overflow ou sem cobertura de um diretório novo; arquivo regular com `nlink>1`; arquivo especial; store com permissões diferentes das esperadas; digest divergente no lançamento; qualquer relatório que afirme `aba_protection_proven`, `STRONG`, isolamento de escritores não cooperativos ou atomicidade da aplicação sem prova correspondente.
+**Recusa:** kernel ou syscall necessária ausente; inventário de capacidades da célula incompleto ou com item não autorizado (montagem, descritor, canal IPC, variável de ambiente, `cwd`, terminal controlador); filesystem não suportado ou não verificado; qualquer fd não previsto na allowlist (inclusive 0–2); travessia de montagem não autorizada (`EXDEV`); campo de identidade ausente na máscara retornada; instabilidade observada além do limite de tentativas; inotify indisponível, com overflow ou sem cobertura de um diretório novo; arquivo regular com `nlink>1`; arquivo especial; store com permissões diferentes das esperadas; digest divergente no lançamento; qualquer relatório que afirme `aba_protection_proven`, `STRONG`, isolamento de escritores não cooperativos, atomicidade da aplicação ou ausência de sobrescrita concorrente sem prova correspondente.
 
-**Linguagem proibida até haver prova:** "elimina ABA", "isolado de escritores", "STRONG", "proveniência verificada contra adversário", "garantia por construção", "sem sobrescrita concorrente". Permitida: "objetivo", "detectado", "recusado se instável", "resíduo medido", "A3 fora da garantia", "NOT_VERIFIED".
+**Linguagem proibida até haver prova:** "elimina ABA", "isolado de escritores", "STRONG", "proveniência verificada contra adversário", "garantia por construção", "dados, nunca capacidades", "único caminho de escrita na origem", "sem sobrescrita concorrente", "CAS atômico" (para a aplicação), "snapshot imutável" (para montagem somente leitura). Permitida: "objetivo", "detectado", "recusado se instável", "resíduo medido", "A3 fora da garantia", "NOT_VERIFIED".
 
 ## 13. Riscos conhecidos e requisitos não resolvidos
 
 - A3 sem proteção, com alcance sobre toda a cadeia (seção 3.1); proteção por C5a/C5c condicional e não verificada, C5b insuficiente isoladamente.
 - A1 é objetivo `NOT_VERIFIED`; SRT 0.0.81 (beta) e bubblewrap 0.12.0 não foram revalidados para as novas montagens; padrões de deny ignorados no Linux falham abertos (documentação do SRT); bubblewrap é ferramenta de construção cujo nível de proteção depende dos argumentos e do que é montado (README do bubblewrap).
 - Descritores herdados: protocolo da seção 7.1 não implementado; comportamento do SRT com fds preexistentes não verificado.
-- Apply Gate sem atomicidade para atualização, remoção e permissões (seção 7.8).
+- Apply Gate sem atomicidade para atualização, remoção e permissões (seção 7.8); divergências posteriores à verificação podem passar despercebidas.
+- Capacidades (descritores, montagens, IPC, ambiente, `cwd`, terminal controlador) e ciclo de vida de descendentes: requisitos da seção 7.1 não implementados; contenção de descendentes que escapam do grupo de processos não verificada.
+- Montagem somente leitura não congela o backing store (seção 7.6).
 - Resíduo de ABA dentro da resolução de timestamps e para escritas não observáveis (`mmap`); não quantificado ainda.
 - Capacidades do ext4 do ambiente (reflink, fs-verity, snapshots) **não verificadas**; WSL2, DrvFs, NFS, FUSE e overlay não avaliados.
 - Escopo de mount namespace dos identificadores de montagem não documentado nas fontes consultadas.
@@ -255,34 +278,59 @@ Nomes só podem ser usados com estes significados. Cada degrau é um **objetivo 
 
 Cada item exige autorização humana específica; esta ADR não autoriza nenhum deles.
 
-## 15. Referências oficiais consultadas (acesso em 25/10/2026)
+## 15. Referências oficiais consultadas (acesso em 25 e 26/10/2026)
 
-A documentação do man-pages (man7.org) é a versão corrente publicada, não vinculada a um kernel específico; versões de kernel citadas são as que as próprias páginas informam. Páginas do GitHub foram lidas na ramificação padrão, salvo indicação de tag.
+**Convenção.** As páginas do man-pages (man7.org) são a versão corrente publicada e **não** estão vinculadas a um kernel específico; versões de kernel citadas são as que as próprias páginas informam. Para as ferramentas com versão fixada, as referências abaixo são **tags**, não a ramificação padrão. Itens marcados *(lida)* tiveram o conteúdo conferido antes de qualquer afirmação técnica; o que não foi lido consta na lista de não verificados.
 
-- landlock(7): https://man7.org/linux/man-pages/man7/landlock.7.html
-- Kernel, Landlock: https://www.kernel.org/doc/html/latest/security/landlock.html
-- mount_namespaces(7): https://man7.org/linux/man-pages/man7/mount_namespaces.7.html
-- user_namespaces(7): https://man7.org/linux/man-pages/man7/user_namespaces.7.html
-- ptrace(2): https://man7.org/linux/man-pages/man2/ptrace.2.html
-- statx(2) (`STATX_MNT_ID` 5.8, `STATX_MNT_ID_UNIQUE` 6.8, `stx_mask`): https://man7.org/linux/man-pages/man2/statx.2.html
-- inotify(7): https://man7.org/linux/man-pages/man7/inotify.7.html
-- memfd_create(2): https://man7.org/linux/man-pages/man2/memfd_create.2.html
-- fcntl(2): https://man7.org/linux/man-pages/man2/fcntl.2.html e selos em https://man7.org/linux/man-pages/man2/F_ADD_SEALS.2const.html
-- prctl(2): https://man7.org/linux/man-pages/man2/prctl.2.html; https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html; https://man7.org/linux/man-pages/man2/PR_SET_NO_NEW_PRIVS.2const.html
-- openat2(2) (Linux 5.6): https://man7.org/linux/man-pages/man2/openat2.2.html
-- renameat2(2) (Linux 3.15): https://man7.org/linux/man-pages/man2/renameat2.2.html
-- open_tree(2): https://man7.org/linux/man-pages/man2/open_tree.2.html
-- ioctl_ficlone(2): https://man7.org/linux/man-pages/man2/ioctl_ficlone.2.html
-- fs-verity: https://docs.kernel.org/filesystems/fsverity.html
-- bubblewrap README: https://github.com/containers/bubblewrap/blob/main/README.md
-- bubblewrap v0.12.0, notas de release: https://github.com/containers/bubblewrap/releases/tag/v0.12.0
-- bubblewrap v0.12.0, opções (`bwrap.xml` na tag): https://raw.githubusercontent.com/containers/bubblewrap/v0.12.0/bwrap.xml
-- sandbox-runtime README (ramificação padrão): https://github.com/anthropic-experimental/sandbox-runtime
+**Kernel e man-pages**
+- statx(2) *(lida)*: https://man7.org/linux/man-pages/man2/statx.2.html
+- inode(7) *(lida)*: https://man7.org/linux/man-pages/man7/inode.7.html
+- inotify(7) *(lida)*: https://man7.org/linux/man-pages/man7/inotify.7.html
+- execve(2) *(lida)*: https://man7.org/linux/man-pages/man2/execve.2.html
+- close_range(2) *(lida)*: https://man7.org/linux/man-pages/man2/close_range.2.html
+- open(2) *(lida)*: https://man7.org/linux/man-pages/man2/open.2.html
+- dup(2) *(lida)*: https://man7.org/linux/man-pages/man2/dup.2.html
+- chmod(2), fchmod, fchmodat *(lida)*: https://man7.org/linux/man-pages/man2/chmod.2.html
+- openat2(2) *(lida)*: https://man7.org/linux/man-pages/man2/openat2.2.html
+- renameat2(2) *(lida)*: https://man7.org/linux/man-pages/man2/renameat2.2.html
+- setsid(2) *(lida)*: https://man7.org/linux/man-pages/man2/setsid.2.html
+- TIOCSTI *(lida)*: https://man7.org/linux/man-pages/man2/TIOCSTI.2const.html
+- unix(7), `SCM_RIGHTS` *(lida)*: https://man7.org/linux/man-pages/man7/unix.7.html
+- prctl(2) *(lida)*: https://man7.org/linux/man-pages/man2/prctl.2.html; `PR_SET_DUMPABLE` https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html; `PR_SET_NO_NEW_PRIVS` https://man7.org/linux/man-pages/man2/PR_SET_NO_NEW_PRIVS.2const.html
+- memfd_create(2) *(lida)*: https://man7.org/linux/man-pages/man2/memfd_create.2.html
+- fcntl(2) e selos *(lida)*: https://man7.org/linux/man-pages/man2/fcntl.2.html; https://man7.org/linux/man-pages/man2/F_ADD_SEALS.2const.html
+- ptrace(2) *(lida)*: https://man7.org/linux/man-pages/man2/ptrace.2.html
+- user_namespaces(7) *(lida)*: https://man7.org/linux/man-pages/man7/user_namespaces.7.html
+- mount_namespaces(7) *(lida)*: https://man7.org/linux/man-pages/man7/mount_namespaces.7.html
+- open_tree(2) *(lida)*: https://man7.org/linux/man-pages/man2/open_tree.2.html
+- ioctl_ficlone(2) *(lida)*: https://man7.org/linux/man-pages/man2/ioctl_ficlone.2.html
+- landlock(7) *(lida)*: https://man7.org/linux/man-pages/man7/landlock.7.html
+- Kernel, Landlock (documentação corrente) *(lida)*: https://www.kernel.org/doc/html/latest/security/landlock.html
+- Kernel, fs-verity (documentação corrente) *(lida)*: https://docs.kernel.org/filesystems/fsverity.html
 
-**Não verificado:** (a) a **versão 0.0.81 do SRT** não foi confirmada em nenhuma das páginas lidas (o README foi lido na ramificação padrão, não em tag correspondente; a página do pacote npm não pôde ser carregada); a fixação em 0.0.81 vem dos registros do próprio repositório; (b) as seções do README do SRT sobre limitações foram lidas de forma parcial (cerca de 100 mil dos 114 mil caracteres, mais o trecho final sobre Windows); (c) a hipótese sobre `ctime` não definível pelo usuário; (d) snapshots de filesystems específicos (Btrfs/XFS) e a disponibilidade de qualquer recurso no ext4 do proprietário; (e) comportamento de fds herdados sob SRT. As afirmações correspondentes são hipóteses.
+**Versões fixadas**
+- Bubblewrap v0.12.0, notas de release *(lida)*: https://github.com/containers/bubblewrap/releases/tag/v0.12.0
+- Bubblewrap v0.12.0, README da tag *(lida)*: https://github.com/containers/bubblewrap/blob/v0.12.0/README.md
+- Bubblewrap v0.12.0, opções (`bwrap.xml` na tag) *(lida)*: https://raw.githubusercontent.com/containers/bubblewrap/v0.12.0/bwrap.xml
+- Sandbox Runtime v0.0.81, release *(lida)*: https://github.com/anthropics/sandbox-runtime/releases/tag/v0.0.81
+- Sandbox Runtime v0.0.81, README da tag *(lida; cerca de 100 mil dos 113 mil caracteres mais o trecho final sobre Windows)*: https://github.com/anthropics/sandbox-runtime/blob/v0.0.81/README.md
+- Já citadas por documentos do repositório: symlink(7).
+
+**Fatos confirmados nas fontes lidas (exemplos usados nesta ADR):** existência da tag e do README do SRT v0.0.81 (release de 20/10, com mudanças descritas apenas para Windows; macOS e Linux inalterados); bubblewrap v0.12.0 documenta `--ro-bind-data`, `--bind-data`, `--file`, `--new-session`, `--disable-userns`, `--die-with-parent`, `--not-a-security-boundary` e não documenta `--bind-fd`/`--ro-bind-fd`; o README do bubblewrap v0.12.0 exige `--new-session` na ausência de filtro seccomp de `TIOCSTI`; `close_range` não enumera descritores; `statx` não oferece bit para `stx_dev_major/minor`; `RENAME_NOREPLACE`/`RENAME_EXCHANGE` não comparam conteúdo.
+
+**Hipóteses e itens não verificados:**
+- A hipótese de que o usuário comum não consegue definir `ctime` (a página `inode(7)` diz apenas que `ctime` muda com escrita ou alteração de metadados e cita `utime` somente para atime/mtime).
+- Comportamento do SRT v0.0.81 e do bubblewrap v0.12.0 com descritores herdados (nenhuma das duas fontes lidas o descreve de forma geral) e se `MSG_CMSG_CLOEXEC` está disponível no recebimento (a página `unix(7)` consultada não o cobre).
+- Escopo por mount namespace dos identificadores de montagem.
+- Um trecho final do README do SRT v0.0.81 não foi lido; não foi encontrada seção de limitações específica de Linux.
+- Snapshots de filesystems específicos (Btrfs/XFS) e a disponibilidade de reflink, snapshot atômico ou fs-verity no ext4 do proprietário.
+- Suficiência de namespace de PIDs ou cgroups para conter descendentes.
 
 ## 16. Histórico de revisões
 
 - **f13ad41** — versão inicial do PR-A.
-- Primeira auditoria independente do Codex (read-only, HEAD `f13ad41`): **REPROVADO, 4 P1 e 6 P2**, sem P0. Esta revisão trata: C5 (separado em C5a/C5b/C5c), garantia prematura de A1 (substituída por objetivos `NOT_VERIFIED` e pelo vocabulário da seção 0), premissa de fds (seção 7.1), compare-and-swap do Apply Gate (seção 7.8), alcance de A3 (3.1), `RESOLVE_NO_XDEV` (7.2), `nlink` e criação de diretórios/arquivos (7.4, 7.5), memfd (8.4), identidade de montagem (7.2) e referências (seção 15). O parecer original é preservado aqui e na descrição do PR #29.
-- Segunda auditoria Codex: **pendente**. Aprovação humana: **pendente**.
+- Primeira auditoria independente do Codex (read-only, HEAD `f13ad41`): **REPROVADO, 4 P1 e 6 P2**, sem P0.
+- **235d182** — primeira rodada de correções (C5 separado em C5a/C5b/C5c; objetivos `NOT_VERIFIED`; protocolo inicial de fds; Apply Gate sem CAS atômico; alcance de A3; `NO_XDEV`; `nlink` e criação; memfd; identidade de montagem; referências).
+- Segunda auditoria Codex (HEAD `235d182`): **REPROVADO, 2 P1, 3 P2 e 2 P3** remanescentes.
+- Segunda rodada de correções (esta revisão): P1-01 bootstrap, capacidades e ciclo de vida (seções 4 e 7.1); P1-02 Apply Gate sem promessa de ausência de sobrescrita (seções 4, 7.7, 7.8, 12); P2-01 bind mounts como capacidades (4, 7.6); P2-02 `statx` e identidade de `root_fd` (7.2); P2-03 `fchmod` × `fchmodat` (7.8); P3-01 referências rastreáveis e versionadas (15); P3-02 ambiente descrito sem caminhos locais pessoais (1). O parecer das duas auditorias é preservado aqui e na descrição do PR #29.
+- Terceira auditoria Codex: **pendente**. Aprovação humana: **pendente**.
