@@ -481,7 +481,8 @@ class FixtureSetupError(Exception):
 
 
 # Fixtures criadas por make_synthetic_fixture NESTE processo: caminho -> (dev, ino)
-# lidos logo após o mkdtemp (None se o lstat falhou). Prefixo, local e não-symlink
+# lidos logo após o mkdtemp; sem identidade registrada não há entrada (e nada é
+# removido). Identidade local registrada NÃO é proveniência confiável de uma raiz real. Prefixo, local e não-symlink
 # NÃO provam que o diretório foi criado por esta execução; só este registro prova.
 _CREATED = {}
 
@@ -493,7 +494,8 @@ def _owned_now(parent):
     return (os.path.basename(parent).startswith("gh-f1-18-fixture-")
             and os.path.dirname(parent) == os.path.realpath(tempfile.gettempdir())
             and stat.S_ISDIR(st.st_mode)
-            and (ident is None or ident == (st.st_dev, st.st_ino)))
+            and ident is not None            # identidade ausente nunca prova posse
+            and ident == (st.st_dev, st.st_ino))
 
 
 def _remove_fixture(parent):
@@ -534,8 +536,11 @@ def make_synthetic_fixture():
     try:
         st = os.lstat(parent)
         _CREATED[parent] = (st.st_dev, st.st_ino)
-    except OSError:
-        _CREATED[parent] = None
+    except Exception as e:
+        # Sem identidade inicial não há como provar posse: não se remove nada
+        # (nem recursivamente) e o resíduo é declarado, não afirmado como removido.
+        _CREATED.pop(parent, None)
+        raise FixtureSetupError(_infra_code(e), ["fixture_remove"]) from None
     name = SYNTHETIC_PREFIX + "root"
     root = os.path.join(parent, name)
     try:

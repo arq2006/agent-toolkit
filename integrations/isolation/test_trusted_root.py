@@ -653,6 +653,45 @@ class CliFaultInjectionTests(IsolatedTmpCase):
         report = T._refused_report("/home/fictional-user/segredo")
         self.assertEqual(report["reason"], "unexpected_failure")
 
+    def test_missing_initial_identity_refuses_and_removes_nothing(self):
+        real_lstat = os.lstat
+        for exc, code in ((OSError(errno.EIO, "/home/fictional-user/segredo"), "infrastructure_EIO"),
+                          (RuntimeError("/home/fictional-user/segredo"), "unexpected_failure")):
+            def failing(path, *a, **k):
+                if os.path.basename(str(path)).startswith("gh-f1-18-fixture-"):
+                    raise exc
+                return real_lstat(path, *a, **k)
+            with mock.patch.object(T.os, "lstat", side_effect=failing), \
+                    mock.patch.object(T.shutil, "rmtree", side_effect=AssertionError("rmtree")) as rm:
+                rc, out, err, before = self.run_main()
+            report = json.loads(out)
+            T.check_root_report(report)
+            self.assertEqual((rc, report["result"], report["reason"], report["cleanup_failures"]),
+                             (2, "REFUSED", code, ["fixture_remove"]))
+            rm.assert_not_called()                    # nenhuma remoção recursiva
+            self.assert_sanitized(out, err, "fictional-user")
+            self.assertEqual(open_fds(), before)
+            self.assertEqual(len(os.listdir(self.iso)), 1)   # resíduo declarado, intacto
+            for leftover in os.listdir(self.iso):
+                self.assertNotIn(os.path.join(self.iso, leftover), T._CREATED)
+                os.rmdir(os.path.join(self.iso, leftover))
+
+    def test_missing_identity_never_proves_ownership(self):
+        parent, _ = T.make_synthetic_fixture()
+        T._CREATED[parent] = None
+        self.assertFalse(T._owned_now(parent))
+        with mock.patch.object(T.shutil, "rmtree", side_effect=AssertionError("rmtree")):
+            self.assertEqual(T._remove_fixture(parent), ["fixture_remove"])
+        self.assertTrue(os.path.isdir(parent))
+        T._CREATED[parent] = (0, 0)                   # identidade errada também não prova
+        self.assertFalse(T._owned_now(parent))
+        st = os.lstat(parent)
+        T._CREATED[parent] = (st.st_dev, st.st_ino)
+        self.assertTrue(T._owned_now(parent))
+        self.assertEqual(T._remove_fixture(parent), [])   # fixture normal: criada e removida
+        self.assertFalse(os.path.lexists(parent))
+
+
     def test_incoherent_report_is_replaced_by_a_refusal(self):
         with mock.patch.object(T, "check_root_report", side_effect=[ValueError("x"), None]) as chk:
             chk.side_effect = [ValueError("x"), {"ok": True}]
