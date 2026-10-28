@@ -26,6 +26,7 @@
 | [plans/GH-F1-15-synthetic-snapshot-race.md](plans/GH-F1-15-synthetic-snapshot-race.md) | Canário de concorrência com seis interleavings fictícios para detectar mutações no snapshot; STRONG bloqueado |
 | [plans/GH-F1-16-synthetic-aba-root-fd-diagnostic.md](plans/GH-F1-16-synthetic-aba-root-fd-diagnostic.md) | Diagnóstico sintético de ABA não detectado e troca de caminho de root_fd; STRONG indisponível |
 | [plans/GH-F1-17-cooperative-source-freeze.md](plans/GH-F1-17-cooperative-source-freeze.md) | Piloto de freeze cooperativo por flock em fixtures, com bypass de escritor não cooperativo reproduzido; STRONG bloqueado |
+| [plans/GH-F1-18-supervisor-root-pilot.md](plans/GH-F1-18-supervisor-root-pilot.md) | PR-B: diagnóstico de FDs herdados e identidade de raiz sintética por openat2/statx; não desbloqueia STRONG |
 | [plans/GH-F1-7-orquestracao-hierarquica.md](plans/GH-F1-7-orquestracao-hierarquica.md) | Estudo da futura GH-F1.7 (orquestrador e 12 especialistas), não aprovada |
 | [../agents/README.md](../agents/README.md) | Definições documentais dos agentes `planner`, `implementer` e `auditor` (GH-F1.2) |
 | [adr/ADR-009-contratos-de-agente-skill-tarefa.md](adr/ADR-009-contratos-de-agente-skill-tarefa.md) | Decisão sobre os contratos |
