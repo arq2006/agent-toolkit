@@ -242,17 +242,21 @@ def run_child(steps=(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
 # Filho dedicado às injeções de falha do registro: uma falha por execução, em um
 # ponto nomeado, com verificação do conjunto REAL de FDs abertos e do estado.
 CHILD_FAULT = r"""
-import json, os, sys
+import json, os, resource, sys
 sys.path.insert(0, sys.argv[1])
 import supervisor_boot as B
 factory, where, nth, slot, interpose = (sys.argv[2], sys.argv[3], int(sys.argv[4]),
                                         sys.argv[5], sys.argv[6] == "1")
+high = sys.argv[8] == "1"
+retry = sys.argv[9] != "0"      # "0": NÃO reutiliza a fábrica antes de close()
 real_fcntl, real_close, real_open = B.fcntl.fcntl, os.close, os.open
+PROBE_TOP = min(resource.getrlimit(resource.RLIMIT_NOFILE)[0], 4096)
 
 
 def openset():
+    # sonda todo o intervalo permitido (até 4096), não só os FDs abaixo de 256
     found = set()
-    for fd in range(256):
+    for fd in range(PROBE_TOP):
         try:
             real_fcntl(fd, B.fcntl.F_GETFD)
             found.add(fd)
@@ -274,10 +278,12 @@ def tick():
         raise Boom("/home/fictional-user/segredo")
 
 
-class FailList(list):
-    def append(self, item):
-        tick()
-        super().append(item)
+class FailSlots(list):
+    # `_pending` tem slots fixos: só atribuição de recibo (não de None) é uma reserva
+    def __setitem__(self, i, value):
+        if value is not None:
+            tick()
+        super().__setitem__(i, value)
 
 
 class FailDict(dict):
@@ -296,18 +302,39 @@ reg = B.CapabilityRegistry()
 target = 1
 if factory == "place" and slot == "closed":
     real_close(target)
+if high:
+    # ocupa 3..299: os FDs que as fábricas criarem caem em números >= 300
+    filler = real_open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+    for n in range(3, 300):
+        if n != filler:
+            os.dup2(filler, n, inheritable=False)
+    if filler >= 300:
+        real_close(filler)
 before = openset()
 closed_log, interposed = [], []
+armed = {"on": False, "tripped": False}   # o rollback começou (falha pós-_issue)
+fail_cfg = None     # falha injetada em `os.close` DURANTE o rollback (6a auditoria, N1)
+fail_state = {"seen": 0, "fd": None}
 
 
 def close_wrap(fd):
     closed_log.append(fd)
+    hit = None
+    if fail_cfg is not None and armed["on"]:
+        fail_state["seen"] += 1
+        if fail_state["seen"] == fail_cfg["k"]:
+            hit = fail_cfg
+            fail_state["fd"] = fd
+    if hit is not None and hit["when"] == "before":
+        raise hit["exc"]                  # o FD NÃO foi fechado (nem chegou ao kernel)
     src = real_open("/dev/null", os.O_RDONLY | os.O_CLOEXEC) if interpose else None
     real_close(fd)
     if interpose:      # um FD novo assume IMEDIATAMENTE o número que acabou de ser liberado
         os.dup2(src, fd, inheritable=False)
         real_close(src)
         interposed.append(fd)
+    if hit is not None:
+        raise hit["exc"]                  # o FD JÁ foi fechado
 
 
 if where == "anchor":
@@ -324,7 +351,83 @@ elif where == "created":
         return RealCreated(*a)
     B._Created = ctor
 elif where == "pending":
-    reg._pending = FailList()
+    reg._pending = FailSlots([None, None])
+elif where == "after_issue":
+    # falha IMEDIATAMENTE depois de `_issue` ter emitido o grant (cenário do Codex)
+    real_issue = B.CapabilityRegistry._issue
+
+    def issue_then_fail(self, created):
+        real_issue(self, created)
+        tick()
+    B.CapabilityRegistry._issue = issue_then_fail
+elif where in ("after_issue_discard", "after_issue_pop"):
+    # 5a auditoria (F1): o rollback é disparado por uma falha logo depois do
+    # `nth`-ésimo `_issue` e, DENTRO da revogação, uma segunda falha é injetada
+    # (descarte do id emitido ou remoção do grant). Sem falta de memória real.
+    real_issue = B.CapabilityRegistry._issue
+
+    def issue_then_fail(self, created):
+        real_issue(self, created)
+        count[0] += 1
+        if count[0] == nth:
+            armed["on"] = True
+            raise Boom("/home/fictional-user/segredo")
+    B.CapabilityRegistry._issue = issue_then_fail
+
+    def trip():
+        if armed["on"] and not armed["tripped"]:
+            armed["tripped"] = True
+            raise Boom("falha dentro da revogacao")
+
+    class ArmedSet(set):
+        def discard(self, item):
+            trip()
+            super().discard(item)
+
+    class ArmedDict(dict):
+        def pop(self, *a):
+            trip()
+            return super().pop(*a)
+    if where.endswith("discard"):
+        reg._issued = ArmedSet()
+    else:
+        reg._grants = ArmedDict()
+elif where.startswith("rbclose:"):
+    # 6a auditoria (N1/N2): o rollback é disparado por uma falha logo depois do
+    # `nth`-ésimo `_issue` e o `k`-ésimo `os.close` DO ROLLBACK levanta `exc`
+    # (OSError(EIO) ou RuntimeError) antes ou depois do fechamento real.
+    _, kind_exc, when, k = where.split(":")
+    fail_cfg = {"exc": OSError(5, "EIO") if kind_exc == "eio" else RuntimeError("x"),
+                "when": when, "k": int(k)}
+    real_issue = B.CapabilityRegistry._issue
+
+    def issue_then_fail(self, created):
+        real_issue(self, created)
+        count[0] += 1
+        if count[0] == nth:
+            armed["on"] = True
+            raise Boom("/home/fictional-user/segredo")
+    B.CapabilityRegistry._issue = issue_then_fail
+elif where.startswith("tmpclose:"):
+    # 7a auditoria (S7-01): em `place_devnull` (slot aberto, tmp != alvo), o 1o
+    # `os.close` DEPOIS do dup2 e ANTES de `_issue` é o do /dev/null temporário.
+    # Ele levanta `exc` antes ou depois do fechamento real. Sem `_issue` envolvido.
+    _, kind_exc, when = where.split(":")
+    if kind_exc == "intr":
+        class Interrupt(BaseException):
+            pass
+        exc_obj = Interrupt()
+    else:
+        exc_obj = OSError(5, "EIO") if kind_exc == "eio" else RuntimeError("x")
+    fail_cfg = {"exc": exc_obj, "when": when, "k": 1}
+    armed["on"] = True
+elif where == "describe":
+    real_describe = B._describe_fd
+
+    def describe_then_fail(fd):
+        tick()
+        return real_describe(fd)
+    B._describe_fd = describe_then_fail
 elif where == "grant":
     RealGrant = B.Grant
 
@@ -341,6 +444,11 @@ elif where == "owned":
 elif where != "none":
     raise SystemExit("ponto desconhecido")
 os.close = close_wrap
+containers = (reg._pending, reg._grants, reg._issued, reg._owned)
+
+
+def pend():
+    return sum(1 for p in reg._pending if p is not None)
 
 
 def call():
@@ -355,8 +463,13 @@ except B.BootRefused as e:
     out["exc"] = "BootRefused:" + e.code
 except Exception as e:
     out["exc"] = type(e).__name__
+# o rollback não substitui nenhuma estrutura do registro (nenhuma lista/dict novo)
+out["same_containers"] = all(a is b for a, b in zip(containers, (
+    reg._pending, reg._grants, reg._issued, reg._owned)))
 out["state"] = {"grants": len(reg._grants), "issued": len(reg._issued),
-                "pending": len(reg._pending), "owned": len(reg._owned)}
+                "pending": pend(), "owned": len(reg._owned)}
+out["uncertain"] = reg.close_uncertain
+out["fail_fd"] = fail_state["fd"]
 os.close = real_close
 B.fcntl.fcntl = real_fcntl
 after = openset()
@@ -371,14 +484,18 @@ else:
     reg._grants = dict(reg._grants)
     reg._issued = set(reg._issued)
     reg._owned = set(reg._owned)
+containers = (reg._pending, reg._grants, reg._issued, reg._owned)   # base p/ close()
 out["retry_state_before"] = {"grants": len(reg._grants), "owned": len(reg._owned)}
-try:
-    call()
-    out["retry"] = "ok"
-except Exception as e:
-    out["retry"] = type(e).__name__
+if retry:
+    try:
+        call()
+        out["retry"] = "ok"
+    except Exception as e:
+        out["retry"] = type(e).__name__
+else:
+    out["retry"] = "skipped"
 out["retry_state"] = {"grants": len(reg._grants), "issued": len(reg._issued),
-                      "pending": len(reg._pending), "owned": len(reg._owned)}
+                      "pending": pend(), "owned": len(reg._owned)}
 report = B.diagnose(reg)
 out["authorized"] = [(e["fd"], e["reason"]) for e in report.get("entries", [])
                      if e["status"] == "authorized"]
@@ -388,23 +505,30 @@ os.close = close_wrap
 reg.close()
 reg.close()
 os.close = real_close
+out["uncertain_final"] = reg.close_uncertain      # sticky: nada a apaga
 out["close_log"] = list(closed_log)
 out["close_interposed_open"] = sorted(set(interposed) & openset())
+out["open_after_close"] = sorted(openset())
 out["close_interposed"] = sorted(set(interposed))
 out["after_close"] = {"grants": len(reg._grants), "owned": len(reg._owned),
-                      "pending": len(reg._pending), "closed": reg.closed}
+                      "pending": pend(), "closed": reg.closed}
+out["close_same_containers"] = all(a is b for a, b in zip(containers, (
+    reg._pending, reg._grants, reg._issued, reg._owned)))
 with open(sys.argv[7], "w") as f:
     json.dump(out, f)
 """
 
 
-def run_fault(factory, where, nth=1, slot="open", interpose=False):
-    """Roda uma injeção de falha num filho descartável; devolve o JSON do filho."""
+def run_fault(factory, where, nth=1, slot="open", interpose=False, high=False, retry=True):
+    """Roda uma injeção de falha num filho descartável; devolve o JSON do filho.
+    `high=True` ocupa os números 3..299 antes, para que os FDs das fábricas caiam
+    em números >= 300 (fora do alcance de uma sonda limitada a 256). `retry=False`
+    não reutiliza a fábrica antes de `close()` (teste de recuperação)."""
     with tempfile.TemporaryDirectory(prefix="gh-f1-18-fault-") as tmp:
         result = os.path.join(tmp, "result.json")
         proc = subprocess.run(
             [sys.executable, "-I", "-c", CHILD_FAULT, HERE, factory, where, str(nth), slot,
-             "1" if interpose else "0", result],
+             "1" if interpose else "0", result, "1" if high else "0", "1" if retry else "0"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=60, close_fds=True, env={})
         if proc.returncode != 0 or not os.path.exists(result):
@@ -1369,13 +1493,20 @@ class ChildFaultTests(unittest.TestCase):
     PIPE_POINTS = [("anchor", 1), ("anchor", 2), ("created", 1), ("created", 2),
                    ("pending", 1), ("pending", 2), ("grant", 1), ("grant", 2),
                    ("grants", 1), ("grants", 2), ("issued", 1), ("issued", 2),
-                   ("owned", 1), ("owned", 2)]
+                   ("owned", 1), ("owned", 2),
+                   # P2 (4a auditoria): falha logo depois de `_issue` ter emitido o
+                   # grant (rollback deve revogá-lo por `used`) e na descrição do FD
+                   ("after_issue", 1), ("after_issue", 2), ("describe", 1), ("describe", 2)]
     PLACE_POINTS = [("anchor", 1), ("created", 1), ("pending", 1), ("grant", 1),
-                    ("grants", 1), ("issued", 1), ("owned", 1)]
+                    ("grants", 1), ("issued", 1), ("owned", 1),
+                    ("after_issue", 1), ("describe", 1)]
 
     def assert_clean_registry(self, out, label):
         self.assertEqual(out["state"], {"grants": 0, "issued": 0, "pending": 0, "owned": 0},
                          label)
+        # nenhuma lista/dict/set foi substituído pelo rollback nem por close()
+        self.assertIs(out["same_containers"], True, label)
+        self.assertIs(out["close_same_containers"], True, label)
         self.assertEqual(out["retry_state_before"], {"grants": 0, "owned": 0}, label)
         # nada concedido por engano: a falha não deixou capacidade autorizada
         # (a tentativa seguinte, sem falha, é o único dono dos grants)
@@ -1421,7 +1552,7 @@ class ChildFaultTests(unittest.TestCase):
                                                       "pending": 0, "owned": 1}, label)
 
     def test_failure_after_first_issue_revokes_it_and_closes_each_anchor_once(self):
-        for where in ("grant", "grants", "issued", "owned"):
+        for where in ("grant", "grants", "issued", "owned", "after_issue"):
             out = run_fault("pipe", where, 2)
             label = "second/" + where
             self.assertEqual(out["after"], out["before"], label)
@@ -1429,6 +1560,205 @@ class ChildFaultTests(unittest.TestCase):
             # âncora 1 (registrada), âncora 2, leitura e escrita: 4 closes, 4 números
             self.assertEqual(len(out["closed_log"]), 4, label)
             self.assert_clean_registry(out, label)
+
+    def test_failure_right_after_issue_revokes_the_emitted_grant(self):
+        # Cenário da 4a auditoria: `_issue` já emitiu o grant e a etapa seguinte
+        # falha. Nenhum grant residual; cada âncora fechada uma única vez.
+        for factory, nth_list in (("pipe", (1, 2)), ("place", (1,))):
+            for nth in nth_list:
+                label = "after_issue/%s/%d" % (factory, nth)
+                out = run_fault(factory, "after_issue", nth)
+                self.assertEqual(out["exc"], "Boom", label)
+                self.assertEqual(out["after"], out["before"], label)
+                if factory == "pipe":
+                    # (em place_devnull o número de tmp é legitimamente reaproveitado
+                    # pela âncora; lá a prova é a interposição, mais abaixo)
+                    self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])),
+                                     label)
+                self.assert_clean_registry(out, label)
+                self.assertEqual(out["retry"], "ok", label)
+
+    def test_failure_inside_revoke_during_rollback_does_not_abandon_the_rest(self):
+        # 5a auditoria (F1): o rollback é disparado por uma falha logo depois de
+        # `_issue` e, DENTRO da revogação, uma segunda falha é injetada. As demais
+        # etapas (recibos, âncora, extremos) têm de ser tentadas e a falha
+        # sinalizada, não escondida.
+        for factory, nth_list in (("pipe", (1, 2)), ("place", (1,))):
+            for nth in nth_list:
+                # (a) falha ao descartar o id emitido: a âncora é liberada pelo
+                # `finally` e todo o resto é limpo; um id obsoleto sem grant é inofensivo
+                label = "revoke_discard/%s/%d" % (factory, nth)
+                out = run_fault(factory, "after_issue_discard", nth)
+                self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                self.assertEqual(out["after"], out["before"], label)       # nada vazou
+                self.assertEqual((out["state"]["grants"], out["state"]["pending"],
+                                  out["state"]["owned"]), (0, 0, 0), label)
+                if factory == "pipe":
+                    self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])),
+                                     label)
+                self.assertEqual(out["retry"], "ok", label)
+                self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                      "closed": True}, label)
+                # (b) falha ao tirar o grant de `_grants`: grant e âncora seguem
+                # íntegros e consistentes no registro (para close()); o ledger local
+                # é limpo por inteiro e nenhuma âncora é fechada duas vezes
+                label = "revoke_pop/%s/%d" % (factory, nth)
+                out = run_fault(factory, "after_issue_pop", nth)
+                self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                self.assertEqual((out["state"]["grants"], out["state"]["issued"],
+                                  out["state"]["owned"], out["state"]["pending"]),
+                                 (1, 1, 1, 0), label)
+                leaked = sorted(set(out["after"]) - set(out["before"]))
+                self.assertEqual(len(leaked), 1, label)       # só a âncora do registro
+                if factory == "pipe":
+                    self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])),
+                                     label)
+                self.assertEqual(out["retry"], "ok", label)
+                self.assertNotIn(leaked[0], out["open_after_close"], label)  # close() a fechou
+                self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                      "closed": True}, label)
+
+    def test_close_failure_inside_rollback_is_signalled_not_absorbed(self):
+        # 6a auditoria (N1/N2, C): durante o rollback, o `os.close` da âncora do
+        # registro (em `_undo_issue`/`_release`) levanta OSError(EIO) ou RuntimeError,
+        # antes ou depois do fechamento real. Nenhum resultado é absorvido: a fábrica
+        # sobe `rollback_incomplete` e `close_uncertain` fica True (sticky).
+        for factory, nth in (("pipe", 1), ("pipe", 2), ("place", 1)):
+            for kind in ("eio", "rt"):
+                for when in ("before", "after"):
+                    label = "rbclose/%s/%d/%s/%s" % (factory, nth, kind, when)
+                    out = run_fault(factory, "rbclose:%s:%s:1" % (kind, when), nth)
+                    self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                    self.assertIs(out["uncertain"], True, label)
+                    self.assertIs(out["uncertain_final"], True, label)    # sticky
+                    self.assertEqual((out["state"]["grants"], out["state"]["pending"],
+                                      out["state"]["owned"]), (0, 0, 0), label)
+                    leaked = sorted(set(out["after"]) - set(out["before"]))
+                    if when == "before":
+                        # o close nem chegou ao kernel: o FD ficou aberto e sem dono
+                        # (resultado incerto, sem retry); é o único resíduo
+                        self.assertEqual(leaked, [out["fail_fd"]], label)
+                    else:
+                        self.assertEqual(leaked, [], label)
+                    if factory == "pipe":      # nenhum número fechado duas vezes
+                        self.assertEqual(len(out["closed_log"]),
+                                         len(set(out["closed_log"])), label)
+                    self.assertEqual(out["retry"], "ok", label)           # registro reutilizável
+
+    def test_uncertain_close_of_the_temporary_devnull_after_dup2_is_rollback_incomplete(self):
+        # 7a auditoria (S7-01): o /dev/null temporário é fechado DEPOIS do dup2 e
+        # ANTES de `_issue`; o slot do ledger é zerado antes do close, então o
+        # rollback não o enxerga. A incerteza conhecida tem de chegar ao sinal
+        # contratado. FD LOCAL: não torna `registry.close_uncertain` True. Sem retry.
+        # (No caso "before" o FD fica aberto porque o wrapper de teste não chamou o
+        # kernel; isso descreve a injeção, não uma garantia sobre o resultado real.)
+        for kind in ("eio", "rt", "intr"):
+            for when in ("before", "after"):
+                label = "tmpclose/%s/%s" % (kind, when)
+                out = run_fault("place", "tmpclose:%s:%s" % (kind, when))
+                self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                self.assertIs(out["uncertain"], False, label)         # FD local
+                self.assertIs(out["uncertain_final"], False, label)
+                self.assertEqual((out["state"]["grants"], out["state"]["pending"],
+                                  out["state"]["owned"]), (0, 0, 0), label)
+                # uma única tentativa de close do temporário: nenhum retry
+                self.assertEqual(out["closed_log"], [out["fail_fd"]], label)
+                leaked = sorted(set(out["after"]) - set(out["before"]))
+                self.assertEqual(leaked, [out["fail_fd"]] if when == "before" else [], label)
+                self.assertEqual(out["retry"], "ok", label)           # fábrica reutilizável
+        # número reaproveitado imediatamente após o close real: o FD novo nunca é fechado
+        out = run_fault("place", "tmpclose:eio:after", interpose=True)
+        self.assertEqual(out["exc"], "BootRefused:rollback_incomplete")
+        self.assertEqual(out["closed_log"], [out["fail_fd"]])
+        self.assertEqual(out["interposed_open"], sorted(set(out["interposed"])))
+        # controle positivo: fechamento normal do temporário
+        out = run_fault("place", "none")
+        self.assertEqual(out["exc"], "NO_ERROR")
+        self.assertIs(out["uncertain"], False)
+
+    def test_close_failure_of_a_ledger_slot_during_rollback_is_signalled(self):
+        # 6a auditoria (D): falha em `_close_slot` durante o rollback de make_pipe
+        # (ordem dos closes: âncora do 1º grant, âncora escrita do ledger, extremo
+        # de leitura, extremo de escrita). Âncora do ledger: rollback_incompleto E
+        # close_uncertain; FD local (extremo do pipe, do chamador): só rollback
+        # incompleto — ambos sem afirmar limpeza integral e sem retry.
+        for k, anchor in ((2, True), (3, False), (4, False)):
+            for kind in ("eio", "rt"):
+                for when in ("before", "after"):
+                    label = "ledger/k=%d/%s/%s" % (k, kind, when)
+                    out = run_fault("pipe", "rbclose:%s:%s:%d" % (kind, when, k), 1)
+                    self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                    self.assertIs(out["uncertain"], anchor, label)
+                    self.assertEqual((out["state"]["grants"], out["state"]["pending"],
+                                      out["state"]["owned"]), (0, 0, 0), label)
+                    leaked = sorted(set(out["after"]) - set(out["before"]))
+                    self.assertEqual(leaked, [out["fail_fd"]] if when == "before" else [],
+                                     label)
+                    self.assertEqual(len(out["closed_log"]), len(set(out["closed_log"])), label)
+                    self.assertEqual(out["retry"], "ok", label)
+
+    def test_rollback_close_failure_never_closes_a_reused_number(self):
+        # 6a auditoria (E): cada close real é seguido, NO MESMO INSTANTE, por um FD
+        # novo que assume o número liberado. Falha de close durante o rollback: nenhum
+        # número é fechado duas vezes e nenhum FD novo é fechado depois.
+        for factory, nth in (("pipe", 1), ("pipe", 2), ("place", 1)):
+            for when in ("before", "after"):
+                label = "reuse/%s/%d/%s" % (factory, nth, when)
+                out = run_fault(factory, "rbclose:eio:%s:1" % when, nth, interpose=True)
+                self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+                if factory == "pipe":
+                    self.assertEqual(len(out["closed_log"]),
+                                     len(set(out["closed_log"])), label)
+                self.assertEqual(out["interposed_open"], sorted(set(out["interposed"])), label)
+                self.assertIs(out["uncertain"], True, label)
+
+    def test_preserved_grant_after_rollback_incomplete_is_recovered_by_close(self):
+        # 6a auditoria (F1, teste complementar): o chamador conserva o registro; a
+        # remoção do grant falha ANTES da mutação (`pop` de `_undo_issue`) =>
+        # `rollback_incomplete`; sem reutilizar a fábrica, `reg.close()` libera as
+        # âncoras que permaneceram sob ownership do registro, sem double-close e sem
+        # tocar nos FDs do chamador. Não há alegação sobre FDs com close incerto.
+        for factory, nth in (("pipe", 1), ("pipe", 2), ("place", 1)):
+            label = "recovery/%s/%d" % (factory, nth)
+            out = run_fault(factory, "after_issue_pop", nth, retry=False)
+            self.assertEqual(out["exc"], "BootRefused:rollback_incomplete", label)
+            self.assertEqual(out["retry"], "skipped", label)
+            self.assertEqual((out["state"]["grants"], out["state"]["owned"],
+                              out["state"]["pending"]), (1, 1, 0), label)  # grant+âncora íntegros
+            kept = sorted(set(out["after"]) - set(out["before"]))
+            self.assertEqual(len(kept), 1, label)           # só a âncora do registro
+            # close(): fecha exatamente essa âncora, uma vez
+            self.assertEqual(out["close_log"], kept, label)
+            self.assertEqual(out["open_after_close"], out["before"], label)  # nada mais mudou
+            self.assertIs(out["uncertain_final"], False, label)   # nenhum close incerto
+            self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                  "closed": True}, label)
+
+    def test_fds_above_256_are_covered_by_the_open_fd_comparison(self):
+        # Os FDs das fábricas caem em números >= 300: uma sonda limitada a 256
+        # não os veria. A comparação antes/depois cobre todo o intervalo.
+        for factory, points in (("pipe", self.PIPE_POINTS), ("place", self.PLACE_POINTS)):
+            for where, nth in points:
+                label = "high/%s/%s/%d" % (factory, where, nth)
+                out = run_fault(factory, where, nth, high=True)
+                self.assertEqual(out["exc"], "Boom", label)
+                self.assertEqual(out["after"], out["before"], label)
+                self.assert_clean_registry(out, label)
+        out = run_fault("pipe", "none", high=True)       # controle positivo: FDs altos
+        self.assertEqual(out["exc"], "NO_ERROR")
+        self.assertTrue(any(fd >= 300 for fd in out["after"]))
+        self.assertEqual(out["retry"], "ok")
+
+    def test_repeated_failures_leave_the_same_fd_set(self):
+        # Cada cenário executa a falha e depois a mesma fábrica sem falha no mesmo
+        # processo (a repetição); o registro fechado não retém nada.
+        for factory, where in (("pipe", "after_issue"), ("pipe", "pending"),
+                               ("place", "after_issue"), ("place", "pending")):
+            out = run_fault(factory, where, 1)
+            self.assertEqual(out["after"], out["before"], (factory, where))
+            self.assertEqual(out["retry"], "ok", (factory, where))
+            self.assertEqual(out["after_close"], {"grants": 0, "owned": 0, "pending": 0,
+                                                  "closed": True}, (factory, where))
 
     def test_a_number_reused_between_two_closes_is_never_closed_again(self):
         # Um FD novo assume o número recém-liberado após CADA close. Se o código
@@ -1464,6 +1794,285 @@ class ChildFaultTests(unittest.TestCase):
         self.assertEqual((final_report["verdict"], final_report["reason"]),
                          ("REFUSED", "registry_closed"))
         self.assertEqual(result["notes"]["grants_after_close"], 0)
+
+
+CHILD_CLOSE = r"""
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import supervisor_boot as B
+mode = sys.argv[2]
+real_close = os.close
+
+
+class Boom(RuntimeError):
+    pass
+
+
+def no(*a, **k):
+    raise AssertionError("close() usou uma operação que cria objetos/iteradores")
+
+
+class NoIterDict(dict):
+    # close() só pode invalidar com clear(): sem iterar, sem tupla, sem cópia
+    __iter__ = popitem = items = keys = values = copy = no
+
+
+class NoIterSet(set):
+    # close() só pode drenar com pop(): sem iterar nem copiar
+    __iter__ = copy = union = difference = intersection = no
+
+
+reg = B.CapabilityRegistry()
+r1, w1 = reg.make_pipe()
+r2, w2 = reg.make_pipe()
+dn = reg.place_devnull(1)
+anchors = sorted(g.anchor_fd for g in reg.grants.values())
+caller_fds = {r1, w1, r2, w2, dn}
+if mode == "noiter":
+    reg._grants = NoIterDict(reg._grants)
+    reg._owned = NoIterSet(reg._owned)
+
+closed_log = []
+raised = {"n": 0, "fd": None}
+
+
+def close_wrap(fd):
+    closed_log.append(fd)
+    first = raised["n"] == 0
+    # modos: boom_* = RuntimeError, eio_* = OSError(EIO) levantado pelo WRAPPER
+    # (não pela syscall); *_before_* = antes do close real, *_after_* = depois
+    exc = OSError(5, "EIO") if mode.startswith("eio") else Boom("x")
+    if mode.endswith("before_real_close") and first:
+        raised["n"], raised["fd"] = 1, fd
+        raise exc                         # o FD NÃO foi fechado
+    after = mode.endswith("after_real_close") and first
+    # (src aberto antes: nunca coincide com `fd`, e dup2(fd, fd) com inheritable=False falha)
+    src = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC) if after else None
+    real_close(fd)
+    if after:
+        raised["n"], raised["fd"] = 1, fd
+        # o número liberado é reaproveitado por outro FD ANTES de a exceção subir
+        os.dup2(src, fd, inheritable=False)
+        real_close(src)
+        raise exc                         # o FD JÁ foi fechado
+
+
+out = {"anchors": anchors, "anchor_count": len(anchors)}
+os.close = close_wrap
+try:
+    reg.close()
+    out["first"] = "ok"
+except B.BootRefused as e:
+    out["first"] = "BootRefused:" + e.code
+except AssertionError as e:
+    out["first"] = "AssertionError:" + str(e)
+out["uncertain_after_first"] = reg.close_uncertain
+out["attempts_after_first"] = len(closed_log)
+out["after_first"] = {"grants": len(reg._grants), "issued": len(reg._issued),
+                      "pending": sum(1 for p in reg._pending if p is not None),
+                      "owned": len(reg._owned), "closed": reg.closed}
+try:
+    reg.close()                  # idempotente e SEM retry de close
+    reg.close()
+    out["second"] = "ok"
+except B.BootRefused as e:
+    out["second"] = "BootRefused:" + e.code
+os.close = real_close
+out["uncertain_final"] = reg.close_uncertain
+out["uncertain_fd"] = raised["fd"]
+out["closed_log"] = list(closed_log)
+open_now = set()
+for fd in range(512):
+    try:
+        B.fcntl.fcntl(fd, B.fcntl.F_GETFD)
+        open_now.add(fd)
+    except OSError:
+        pass
+out["anchors_still_open"] = sorted(set(anchors) & open_now)
+out["caller_fds_open"] = sorted(caller_fds & open_now)
+out["caller_fds"] = sorted(caller_fds)
+out["final"] = {"grants": len(reg._grants), "issued": len(reg._issued),
+                "owned": len(reg._owned), "closed": reg.closed}
+with open(sys.argv[3], "w") as f:
+    json.dump(out, f)
+"""
+
+
+def run_close_child(mode):
+    with tempfile.TemporaryDirectory(prefix="gh-f1-18-close-") as tmp:
+        result = os.path.join(tmp, "result.json")
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", CHILD_CLOSE, HERE, mode, result],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=60, close_fds=True, env={})
+        if proc.returncode != 0 or not os.path.exists(result):
+            raise AssertionError("filho falhou (evidência insuficiente): rc=%s" % proc.returncode)
+        with open(result) as f:
+            return json.load(f)
+
+
+class CloseDrainTests(unittest.TestCase):
+    """`close()` libera as âncoras sem depender de alocações evitáveis."""
+
+    def assert_all_anchors_closed_once(self, out):
+        self.assertEqual(out["anchor_count"], 5)                  # 2 pipes x 2 + devnull
+        self.assertEqual(out["anchors_still_open"], [], out)      # nenhuma âncora vazou
+        # cada âncora fechada uma única vez; os FDs do chamador não foram tocados
+        self.assertEqual(sorted(out["closed_log"]), out["anchors"], out)
+        self.assertEqual(out["caller_fds_open"], out["caller_fds"], out)
+        self.assertEqual(out["final"], {"grants": 0, "issued": 0, "owned": 0,
+                                        "closed": True}, out)
+
+    def test_close_needs_no_iteration_tuple_or_copy(self):
+        # grants/owned são subclasses que FALHAM em qualquer iteração, popitem,
+        # items/keys/values ou cópia: close() só usa clear() e pop().
+        out = run_close_child("noiter")
+        self.assertEqual(out["first"], "ok", out)
+        self.assertEqual(out["after_first"], {"grants": 0, "issued": 0, "pending": 0,
+                                              "owned": 0, "closed": True}, out)
+        self.assert_all_anchors_closed_once(out)
+
+    def assert_uncertain_close(self, out):
+        """Contrato de `close()` quando `os.close` levanta algo que não é OSError:
+        grants invalidados, cada âncora tentada UMA vez (sem retry), as demais
+        âncoras fechadas, resultado marcado como desconhecido."""
+        self.assertEqual(out["first"], "BootRefused:close_uncertain", out)
+        self.assertIs(out["uncertain_after_first"], True, out)
+        self.assertIs(out["uncertain_final"], True, out)          # sticky
+        self.assertEqual(out["after_first"], {"grants": 0, "issued": 0, "pending": 0,
+                                              "owned": 0, "closed": True}, out)
+        # todas as 5 âncoras foram tentadas na PRIMEIRA chamada, cada uma uma vez
+        self.assertEqual(out["attempts_after_first"], 5, out)
+        self.assertEqual(sorted(out["closed_log"]), out["anchors"], out)
+        # as chamadas seguintes não repetem nenhum close e não levantam
+        self.assertEqual(out["second"], "ok", out)
+        self.assertEqual(len(out["closed_log"]), 5, out)
+        self.assertEqual(out["caller_fds_open"], out["caller_fds"], out)
+        self.assertEqual(out["final"], {"grants": 0, "issued": 0, "owned": 0,
+                                        "closed": True}, out)
+
+    def test_close_failure_before_the_real_close_is_unknown_and_never_retried(self):
+        # Falha ANTES de o FD ser realmente fechado: o FD fica aberto e sem dono.
+        # É o limite estrutural: Python não distingue este caso do "depois". O código
+        # não finge recuperação: sinaliza close_uncertain, não repete o close e
+        # fecha todas as outras âncoras. Vale para QUALQUER Exception, `OSError`
+        # incluído (6a auditoria, N1): um OSError levantado por um wrapper antes de
+        # entrar no kernel não prova que o FD foi fechado.
+        for mode in ("boom_before_real_close", "eio_before_real_close"):
+            out = run_close_child(mode)
+            self.assert_uncertain_close(out)
+            self.assertEqual(out["anchors_still_open"], [out["uncertain_fd"]], (mode, out))
+
+    def test_close_failure_after_the_real_close_does_not_close_a_reused_number(self):
+        # Falha DEPOIS de o FD ser realmente fechado (RuntimeError ou OSError(EIO),
+        # como a syscall Linux que devolve erro depois de liberar o número) e com o
+        # número já reaproveitado por outro FD: o mesmo sinal de incerteza (não se
+        # sabe se foi antes ou depois), nenhuma âncora vazada e o FD novo NUNCA é
+        # fechado (não há retry).
+        for mode in ("boom_after_real_close", "eio_after_real_close"):
+            out = run_close_child(mode)
+            self.assert_uncertain_close(out)
+            self.assertEqual(out["anchors_still_open"], [out["uncertain_fd"]], (mode, out))
+            # (o número está aberto porque o FD NOVO o ocupa; a âncora em si foi fechada)
+            self.assertEqual(out["closed_log"].count(out["uncertain_fd"]), 1, (mode, out))
+
+    def test_uncertainty_persists_across_later_close_calls(self):
+        # F: `close_uncertain` é sticky; chamadas posteriores a close() retornam
+        # normalmente e NÃO são prova de limpeza completa (já apareceu em
+        # `assert_uncertain_close`: uncertain_after_first e uncertain_final).
+        out = run_close_child("eio_before_real_close")
+        self.assertEqual(out["second"], "ok", out)
+        self.assertIs(out["uncertain_after_first"], True, out)
+        self.assertIs(out["uncertain_final"], True, out)
+
+    def test_positive_control_plain_close(self):
+        out = run_close_child("plain")
+        self.assertEqual(out["first"], "ok", out)
+        self.assert_all_anchors_closed_once(out)
+
+
+class OwnershipStructureGuardTests(unittest.TestCase):
+    """Guarda ESTRUTURAL (não comportamental): os caminhos de rollback/cleanup do
+    registro não criam listas, iteradores nem compreensões. Prova só o texto do
+    código; o comportamento é coberto por `ChildFaultTests`."""
+
+    FORBIDDEN_CALLS = {"list", "iter", "next", "set", "dict", "tuple", "sorted"}
+    CLOSE_ONLY_FORBIDDEN_CALLS = {"id"}     # close() nem cria o int de id()
+    # métodos que constroem tupla/lista/view/cópia (clear/pop/discard/add não)
+    FORBIDDEN_METHODS = {"popitem", "items", "keys", "values", "copy", "update"}
+    METHODS = {"close", "_revoke", "_drop_pending", "_claim_pending"}
+    FUNCTIONS = {"_release", "_close_slot"}
+
+    def functions(self):
+        import ast
+        with open(os.path.join(HERE, "supervisor_boot.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        found = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "CapabilityRegistry":
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name in self.METHODS:
+                        found[item.name] = item
+            elif isinstance(node, ast.FunctionDef) and node.name in self.FUNCTIONS:
+                found[node.name] = node
+        return found
+
+    def test_cleanup_paths_do_not_allocate_containers(self):
+        import ast
+        found = self.functions()
+        self.assertEqual(set(found), self.METHODS | self.FUNCTIONS)
+        for name, fn in found.items():
+            for node in ast.walk(fn):
+                self.assertNotIsInstance(
+                    node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+                           ast.List, ast.Set, ast.Dict), name)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    self.assertNotIn(node.func.id, self.FORBIDDEN_CALLS, name)
+                    if name == "close":
+                        self.assertNotIn(node.func.id, self.CLOSE_ONLY_FORBIDDEN_CALLS, name)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    self.assertNotIn(node.func.attr, self.FORBIDDEN_METHODS, name)
+                if isinstance(node, ast.Starred):
+                    self.fail("%s: *args aloca uma tupla" % name)
+
+    def test_drop_pending_has_a_single_receipt_parameter(self):
+        fn = self.functions()["_drop_pending"]
+        self.assertIsNone(fn.args.vararg)
+        self.assertEqual([a.arg for a in fn.args.args], ["self", "receipt"])
+
+
+class PendingSlotsTests(unittest.TestCase):
+    """`_pending` tem capacidade fixa e só é alterado por atribuição."""
+
+    def test_claim_and_drop_use_fixed_slots_in_place(self):
+        reg = B.CapabilityRegistry()
+        slots = reg._pending
+        self.assertEqual(list(slots), [None, None])
+        a, b, c = B._Created(), B._Created(), B._Created()
+        reg._claim_pending(a)
+        reg._claim_pending(b)
+        with self.assertRaises(B.BootRefused) as ctx:
+            reg._claim_pending(c)                       # capacidade esgotada: recusa
+        self.assertEqual(ctx.exception.code, "pending_exhausted")
+        reg._drop_pending(a)
+        reg._drop_pending(a)                            # idempotente
+        reg._drop_pending(None)                         # nunca esvazia um slot livre por engano
+        self.assertIs(reg._pending, slots)
+        self.assertEqual([p is None for p in slots], [True, False])
+        reg._claim_pending(c)
+        self.assertIs(slots[0], c)
+        reg.close()
+        self.assertIs(reg._pending, slots)
+        self.assertEqual(list(slots), [None, None])
+
+    def test_issue_refuses_unreserved_receipts(self):
+        reg = B.CapabilityRegistry()
+        with self.assertRaises(B.BootRefused) as ctx:
+            reg._issue(B._Created(0, 3, {}, "forged", True))   # não reservado em _pending
+        self.assertEqual(ctx.exception.code, "declaration_refused")
+        with self.assertRaises(B.BootRefused):
+            reg._issue(0)
+        self.assertEqual(len(reg._grants), 0)
 
 
 if __name__ == "__main__":

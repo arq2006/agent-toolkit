@@ -144,13 +144,17 @@ class Grant:
 
 
 class _Created:
-    """Recibo de um FD que uma fábrica criou agora e ainda não foi emitido."""
-    __slots__ = ("fd", "anchor", "entry", "purpose", "inheritable", "used")
+    """Recibo de um FD que uma fábrica criou agora e ainda não foi emitido.
 
-    def __init__(self, fd, anchor, entry, purpose, inheritable):
+    As fábricas o constroem (vazio) ANTES de qualquer syscall e só preenchem os
+    campos depois, por atribuição: nenhuma alocação entre a syscall e o registro."""
+    __slots__ = ("fd", "anchor", "entry", "purpose", "inheritable", "used", "gid")
+
+    def __init__(self, fd=-1, anchor=-1, entry=None, purpose="", inheritable=False):
         self.fd, self.anchor, self.entry = fd, anchor, entry
         self.purpose, self.inheritable = purpose, inheritable
         self.used = False
+        self.gid = -1    # id() do Grant emitido, conservado p/ o rollback não recalculá-lo
 
 
 def _require_platform():
@@ -244,15 +248,43 @@ def _kcmp_same_ofd(fd_a, fd_b):
 def _release(owned, fd):
     """Fecha `fd` somente se `owned` ainda o possui, e o tira de `owned` ANTES de
     fechar: cada FD é fechado no máximo uma vez, nunca se tenta de novo, e um
-    número já fechado (talvez reaproveitado por outro FD) não é fechado outra vez."""
-    try:
-        owned.remove(fd)
-    except (KeyError, ValueError):
-        return
+    número já fechado (talvez reaproveitado por outro FD) não é fechado outra vez.
+    `owned` é um conjunto; consulta e descarte não criam objetos (sem exceção).
+
+    Devolve True se `fd` não era possuído ou se `os.close` RETORNOU normalmente;
+    False se `os.close` levantou qualquer `Exception`, `OSError` incluído: a
+    syscall Linux costuma liberar o número mesmo quando devolve erro (exceto
+    EBADF), mas um `OSError` também pode vir de um wrapper Python antes de
+    entrar no kernel, e o código não distingue os dois casos. O resultado é
+    INCERTO, não há retry, e quem chama deve sinalizá-lo (nunca absorvê-lo)."""
+    if fd not in owned:
+        return True
+    owned.discard(fd)
     try:
         os.close(fd)
-    except OSError:
-        pass
+    except Exception:
+        return False
+    return True
+
+
+def _close_slot(slots, i, skip=False):
+    """Fecha o FD do slot `i` de um ledger de chamada. O slot é zerado ANTES do
+    close (cada FD é fechado no máximo uma vez). `skip=True` só zera: o FD já
+    pertence a outro dono (a âncora de um grant emitido, desfeita por
+    `_undo_issue`). Devolve True se não havia o que fechar ou se `os.close`
+    retornou normalmente; False se levantou qualquer `Exception` (resultado
+    INCERTO, sem retry): quem chama sinaliza, nunca absorve."""
+    fd = slots[i]
+    if fd < 0:
+        return True
+    slots[i] = -1
+    if skip:
+        return True
+    try:
+        os.close(fd)
+    except Exception:
+        return False
+    return True
 
 
 class CapabilityRegistry:
@@ -264,25 +296,59 @@ class CapabilityRegistry:
     grants; os FDs entregues ao chamador (pipes, slots 0-2) não são fechados.
     Os testes só chamam as fábricas em subprocessos descartáveis.
 
-    Posse de FDs (cada um fechado no máximo uma vez): durante uma fábrica, os FDs
-    e âncoras recém-criados pertencem a uma lista local da chamada e saem dela
-    antes de serem fechados; ao emitir o grant, a âncora passa a pertencer a
-    `_owned` do registro e só `_revoke`/`close()` a fecham. `_issue` é
-    transacional: se falhar, nenhum estado do registro muda e a âncora continua
-    com a fábrica. Falha numa fábrica não deixa grant, recibo pendente nem âncora.
+    Posse de FDs (cada um fechado no máximo uma vez): antes de qualquer syscall,
+    cada fábrica reserva um ledger de tamanho fixo (slots `-1`) e os recibos;
+    o resultado de cada syscall é gravado por atribuição indexada (sem alocar) e
+    o slot é zerado ANTES do close. Ao emitir o grant, a âncora passa a
+    pertencer a `_owned` do registro e só `_revoke`/`close()` a fecham. A
+    INSTALAÇÃO do grant em `_issue` é transacional: se falhar antes de o novo
+    grant ficar instalado, nenhum estado do registro muda e a âncora continua
+    com a fábrica; depois de instalado, `_issue` marca o recibo `used` e a
+    liberação da âncora de um grant obsoleto (substituição no mesmo número)
+    pode falhar com o novo grant JÁ instalado (a fábrica o desfaz no rollback).
+    O rollback deriva do estado `used` dos recibos (um
+    grant já emitido é revogado; a sua âncora não é fechada pelo ledger), não de
+    uma lista construída depois. `_pending` tem capacidade fixa (2 slots, uso
+    sequencial, sem reentrância) e é alterado só por atribuição; `close()`,
+    `_revoke` e `_drop_pending` não criam listas, iteradores nem compreensões.
+
+    Rollback das fábricas: o `id()` do grant é conservado no recibo (`gid`) e o
+    desfazer (`_undo_issue`) não o recalcula. TODAS as etapas independentes
+    (desfazer cada grant emitido, liberar os slots pendentes, fechar as âncoras e
+    os FDs do ledger) são tentadas mesmo quando uma falha; se alguma falhar, a
+    fábrica levanta `BootRefused("rollback_incomplete")` em vez de esconder o
+    resíduo (que continua em `_grants`/`_owned`, fechado por `close()`). Sem
+    falha na limpeza: nenhum grant, recibo pendente nem âncora residual.
+
+    `close()`: invalida primeiro (grants, emitidos, pendentes) e depois tenta
+    fechar cada âncora UMA vez, sem retry. Se `os.close` RETORNA, a tentativa
+    está concluída. Se levanta QUALQUER `Exception` (`OSError` incluído) o
+    resultado é INCERTO: a syscall Linux costuma liberar o número mesmo ao
+    devolver erro (exceto EBADF), mas um `OSError` também pode vir de um wrapper
+    Python antes do kernel e o código não distingue os dois casos. O registro
+    marca `close_uncertain` (sticky: vale para `close()`, rollback das fábricas,
+    `_revoke` e substituição de grants), não repete o close, continua a limpar as
+    demais âncoras e levanta `BootRefused("close_uncertain")` no fim. Isso é
+    risco residual declarado, não uma garantia de recuperação.
+
+    Limite: se a própria syscall (`os.pipe2`, `os.open`, `fcntl`) falhar ao
+    montar o inteiro de retorno DEPOIS de o kernel ter criado o FD, o CPython não
+    devolve o número e nada em Python o recupera; é resíduo conhecido. A
+    garantia cobre a contabilidade posterior à syscall.
 
     Limite: isto elimina o caminho de concessão por declaração da interface
     operacional; não é fronteira de segurança contra código Python arbitrário
     no mesmo processo, que pode alterar qualquer objeto (A3, fora da garantia).
     """
-    __slots__ = ("_grants", "_issued", "_pending", "_owned", "_closed")
+    __slots__ = ("_grants", "_issued", "_pending", "_owned", "_closed", "_close_uncertain")
 
     def __init__(self):
         self._grants = {}
         self._issued = set()    # ids dos Grants emitidos por ESTE registro
-        self._pending = []      # recibos criados e ainda não emitidos
+        self._pending = [None, None]   # slots fixos: recibos criados e não emitidos
         self._owned = set()     # âncoras que o registro possui (uma por grant)
         self._closed = False
+        self._close_uncertain = False
 
     def __enter__(self):
         return self
@@ -298,6 +364,41 @@ class CapabilityRegistry:
     def closed(self):
         return self._closed
 
+    @property
+    def close_uncertain(self):
+        """True (sticky: nada a apaga) se o `os.close` de QUALQUER âncora deste
+        registro — em `close()`, no rollback das fábricas, em `_revoke` ou na
+        substituição de um grant — levantou uma exceção (`OSError` incluído):
+        o resultado é incerto e a limpeza NÃO é dada por completa. Uma chamada
+        posterior a `close()` que retorne normalmente não prova limpeza completa."""
+        return self._close_uncertain
+
+    def _release_anchor(self, fd):
+        """`_release` de uma âncora do registro; qualquer resultado incerto (False
+        ou exceção que escape, ex. KeyboardInterrupt) torna `close_uncertain` True."""
+        try:
+            ok = _release(self._owned, fd)
+        except BaseException:
+            self._close_uncertain = True
+            raise
+        if not ok:
+            self._close_uncertain = True
+        return ok
+
+    def _drop_slot(self, slots, i, skip=False, anchor=False):
+        """`_close_slot` para o rollback das fábricas; devolve True se limpo. Falha
+        (False ou exceção) = rollback incompleto, nunca absorvida. `anchor=True`
+        para as âncoras do ledger (também tornam `close_uncertain` True); os FDs
+        locais (extremos do pipe, `/dev/null` temporário) só tornam o rollback
+        incompleto."""
+        try:
+            ok = _close_slot(slots, i, skip)
+        except BaseException:
+            ok = False
+        if not ok and anchor:
+            self._close_uncertain = True
+        return ok
+
     def _require_open(self):
         if self._closed:
             raise BootRefused("registry_closed")
@@ -306,11 +407,15 @@ class CapabilityRegistry:
         """Emite o grant de um recibo criado por uma fábrica; recusa qualquer
         outra coisa (inclusive um int: "registrar" um FD por declaração).
 
-        Transacional: qualquer falha desfaz o que foi tocado e deixa o registro
-        como estava. Nunca fecha a âncora do recibo: em caso de falha ela segue
-        com a fábrica (que a fecha uma vez); em caso de sucesso passa ao registro."""
+        A INSTALAÇÃO é transacional: uma falha antes de o novo grant ficar instalado
+        desfaz o que foi tocado e deixa o registro como estava; nunca fecha a
+        âncora do recibo nesse caso (ela segue com a fábrica, que a fecha uma vez).
+        Depois de instalado o novo grant (recibo `used`), a liberação da âncora de
+        um grant obsoleto no mesmo número pode falhar (`close_uncertain`) com o novo
+        grant JÁ instalado: `_issue` não o desfaz; o rollback da fábrica o faz."""
+        pending = self._pending
         if type(created) is not _Created or created.used \
-                or not any(created is p for p in self._pending):
+                or (created is not pending[0] and created is not pending[1]):
             raise BootRefused("declaration_refused")
         self._require_open()
         entry = created.entry
@@ -318,9 +423,10 @@ class CapabilityRegistry:
                       entry["flags"], created.inheritable, created.purpose,
                       created.anchor)
         old = self._grants.get(created.fd)   # grant obsoleto no mesmo número
+        gid = id(grant)                      # calculado UMA vez; o rollback o reutiliza
         added_issued = added_owned = False
         try:
-            self._issued.add(id(grant))
+            self._issued.add(gid)
             added_issued = True
             self._owned.add(created.anchor)
             added_owned = True
@@ -329,31 +435,109 @@ class CapabilityRegistry:
             if added_owned:
                 self._owned.discard(created.anchor)
             if added_issued:
-                self._issued.discard(id(grant))
+                self._issued.discard(gid)
             raise
+        created.gid = gid
         created.used = True
         if old is not None:
-            self._issued.discard(id(old))
-            _release(self._owned, getattr(old, "anchor_fd", None))
+            try:
+                self._issued.discard(id(old))
+            finally:
+                # a âncora do grant obsoleto é liberada mesmo se o descarte falhar;
+                # fechamento incerto não é absorvido (a fábrica faz o rollback)
+                if not self._release_anchor(getattr(old, "anchor_fd", None)):
+                    raise BootRefused("close_uncertain") from None
 
     def _revoke(self, fd):
         grant = self._grants.pop(fd, None)
         if grant is not None:
-            self._issued.discard(id(grant))
-            _release(self._owned, getattr(grant, "anchor_fd", None))
+            try:
+                self._issued.discard(id(grant))
+            finally:
+                # a âncora é fechada mesmo se o descarte acima falhar; fechamento
+                # incerto não é absorvido
+                if not self._release_anchor(getattr(grant, "anchor_fd", None)):
+                    raise BootRefused("close_uncertain") from None
 
-    def _drop_pending(self, *receipts):
-        self._pending = [p for p in self._pending
-                         if not any(p is r for r in receipts)]
+    def _undo_issue(self, receipt):
+        """Desfaz um grant que `_issue` emitiu (recibo `used`), para o rollback das
+        fábricas. Não chama `id()`: usa o `gid` conservado. Primeiro o grant sai de
+        `_grants` (se isso falhar, grant e âncora seguem íntegros e consistentes,
+        em `_grants`/`_owned`, para `close()`); depois o id emitido e, SEMPRE, a
+        âncora (via `finally`), que é fechada no máximo uma vez."""
+        self._grants.pop(receipt.fd, None)
+        try:
+            self._issued.discard(receipt.gid)
+        finally:
+            # fechamento incerto da âncora não é absorvido: o rollback fica incompleto
+            if not self._release_anchor(receipt.anchor):
+                raise BootRefused("close_uncertain") from None
+
+    def _claim_pending(self, receipt):
+        """Reserva um slot de `_pending` (atribuição; não aloca)."""
+        pending = self._pending
+        if pending[0] is None:
+            pending[0] = receipt
+        elif pending[1] is None:
+            pending[1] = receipt
+        else:
+            raise BootRefused("pending_exhausted")
+
+    def _drop_pending(self, receipt):
+        """Libera o slot do recibo, se estiver reservado (atribuição; não aloca)."""
+        if receipt is None:
+            return
+        pending = self._pending
+        if pending[0] is receipt:
+            pending[0] = None
+        if pending[1] is receipt:
+            pending[1] = None
 
     def close(self):
-        """Libera âncoras e invalida os grants. Idempotente."""
+        """Invalida os grants e libera as âncoras. Idempotente.
+
+        Primeiro a invalidação (`clear()` de grants, emitidos e slots pendentes:
+        nenhuma tupla, lista, iterador nem `id()`), depois a drenagem de `_owned`
+        — que contém TODAS as âncoras do registro, uma por grant — com
+        `set.pop()`, que tira o FD da posse ANTES de fechá-lo. Cada âncora é
+        fechada no máximo UMA vez; nunca há retry.
+
+        - `os.close` RETORNA normalmente: tentativa concluída (confia-se em
+          `os.close`; um wrapper defeituoso que "retorna" sem fechar está fora do
+          contrato).
+        - `os.close` levanta QUALQUER `Exception`, `OSError` incluído: o resultado
+          é INCERTO. A syscall Linux costuma liberar o número mesmo ao devolver
+          erro (exceto EBADF), mas um `OSError` também pode ser levantado por um
+          wrapper Python antes de entrar no kernel, e o código não distingue os
+          dois casos. Marca-se `close_uncertain` (sticky), NÃO se repete o close
+          (o número pode já ter sido reaproveitado), continua-se a drenar as
+          demais âncoras e, no fim, levanta-se `BootRefused("close_uncertain")`.
+          O grant já está invalidado; o FD incerto é risco residual declarado,
+          sem garantia de recuperação.
+        - `BaseException` (ex.: KeyboardInterrupt): marca incerteza e propaga; as
+          âncoras restantes seguem em `_owned` e uma nova chamada as fecha.
+        Uma chamada posterior a `close()` que retorne normalmente NÃO apaga a
+        incerteza anterior nem prova limpeza completa."""
         self._closed = True
-        while self._grants:
-            self._revoke(next(iter(self._grants)))
-        for fd in list(self._owned):
-            _release(self._owned, fd)
-        self._pending = []
+        self._grants.clear()
+        self._issued.clear()
+        pending = self._pending
+        pending[0] = None
+        pending[1] = None
+        owned = self._owned
+        uncertain = False
+        while owned:
+            fd = owned.pop()
+            try:
+                os.close(fd)
+            except Exception:
+                uncertain = True
+                self._close_uncertain = True
+            except BaseException:
+                self._close_uncertain = True
+                raise
+        if uncertain:
+            raise BootRefused("close_uncertain") from None
 
     def place_devnull(self, target_fd):
         """Abre /dev/null NOVO (não duplica FD herdado) em 0, 1 ou 2, herdável.
@@ -367,18 +551,26 @@ class CapabilityRegistry:
         fechado, e a âncora e o recibo criados aqui são desfeitos. Se a falha
         ocorrer DEPOIS de o dup2 ter substituído o objeto herdado, o slot
         permanece como /dev/null herdável, sem grant (a autoridade herdada
-        anterior já foi descartada e não é restaurável).
+        anterior já foi descartada e não é restaurável). Se o fechamento do
+        temporário depois do dup2 tiver resultado incerto (qualquer exceção de
+        `os.close`), o rollback continua suas demais etapas, não repete o close e
+        a fábrica levanta `BootRefused("rollback_incomplete")`; esse FD é local e
+        NÃO torna `close_uncertain` True (só âncoras do registro o fazem).
         """
         self._require_open()
         if type(target_fd) is not int or target_fd not in (0, 1, 2):
             raise BootRefused("invalid_target")
+        # Ledger e recibo reservados ANTES do open: nenhuma alocação entre a
+        # syscall e o registro. slots: [tmp aberto por esta chamada, âncora].
+        slots = [-1, -1]
+        receipt = _Created()
         try:
-            tmp = os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC)
+            slots[0] = os.open("/dev/null", os.O_RDWR | os.O_CLOEXEC)
         except OSError:
             raise BootRefused("place_devnull_failed") from None
-        owned = [tmp]        # FDs que ESTA chamada abriu e ainda possui
-        anchor = receipt = None
+        tmp_unknown = False     # fechamento do temporário (após dup2) com resultado incerto
         try:
+            tmp = slots[0]
             st = os.fstat(tmp)
             if not stat.S_ISCHR(st.st_mode) or st.st_rdev != _DEVNULL_RDEV:
                 raise BootRefused("devnull_identity")
@@ -387,7 +579,17 @@ class CapabilityRegistry:
                 os.set_inheritable(tmp, True)
             else:
                 os.dup2(tmp, target_fd, inheritable=True)
-                _release(owned, tmp)
+                # O slot do ledger é zerado ANTES do close: o rollback não vê mais o
+                # temporário. Por isso a incerteza é registrada AQUI, antes de subir,
+                # e o rollback a incorpora ao estado `clean` (S7-01). Sem retry.
+                try:
+                    tmp_closed = _close_slot(slots, 0)
+                except BaseException:
+                    tmp_unknown = True
+                    raise
+                if not tmp_closed:
+                    tmp_unknown = True
+                    raise BootRefused("close_uncertain")
             # Um grant anterior neste slot descreve um objeto já substituído.
             self._revoke(target_fd)
             state = _describe_fd(target_fd)
@@ -395,64 +597,134 @@ class CapabilityRegistry:
                     != ("chr_devnull", False, "rdwr", False):
                 raise BootRefused("place_devnull_state")
             # Âncora >= 3 para nunca ocupar um slot padrão fechado.
-            anchor = fcntl.fcntl(target_fd, fcntl.F_DUPFD_CLOEXEC, 3)
-            owned.append(anchor)
-            receipt = _Created(target_fd, anchor, state, "stdio_devnull", True)
-            self._pending.append(receipt)
+            slots[1] = fcntl.fcntl(target_fd, fcntl.F_DUPFD_CLOEXEC, 3)
+            receipt.fd, receipt.anchor, receipt.entry = target_fd, slots[1], state
+            receipt.purpose, receipt.inheritable = "stdio_devnull", True
+            self._claim_pending(receipt)
             self._issue(receipt)
+            # Emitido: a âncora é do registro e o slot é do chamador.
+            slots[1] = -1
+            if slots[0] == target_fd:
+                slots[0] = -1
         except BaseException as e:
-            self._drop_pending(receipt)
-            for fd in list(owned):
-                _release(owned, fd)    # tmp (se for o slot) e âncora, uma vez cada
+            # Todas as etapas independentes são TENTADAS, mesmo se uma falhar; só
+            # depois a exceção. Um grant já emitido é desfeito por `_undo_issue`
+            # (fecha a âncora do registro); o ledger não a fecha de novo.
+            # `tmp_unknown`: o temporário (FD LOCAL, não âncora) já foi tentado e o
+            # resultado é incerto; não marca `registry.close_uncertain`.
+            clean = not tmp_unknown
+            try:
+                if receipt.used:
+                    self._undo_issue(receipt)
+            except BaseException:
+                clean = False
+            try:
+                self._drop_pending(receipt)
+            except BaseException:
+                clean = False
+            # âncora do ledger (também torna close_uncertain True) e FD local (tmp,
+            # se for o slot desta chamada): falha em qualquer um = rollback incompleto
+            if not self._drop_slot(slots, 1, receipt.used, True):
+                clean = False
+            if not self._drop_slot(slots, 0):
+                clean = False
+            if not clean:
+                raise BootRefused("rollback_incomplete") from None
             if isinstance(e, BootRefused):
                 raise
             if isinstance(e, OSError):
                 raise BootRefused("place_devnull_failed") from None
             raise
-        # Emitido: a âncora é do registro e o slot é do chamador.
-        owned.remove(anchor)
-        if tmp in owned:
-            owned.remove(tmp)
         self._drop_pending(receipt)
         return target_fd
 
     def make_pipe(self):
         """Pipe criado aqui, com CLOEXEC; devolve (leitura, escrita).
 
-        Tudo ou nada: se qualquer etapa falhar, nenhum grant é emitido (um
-        primeiro grant já emitido é revogado) e os dois FDs, as âncoras e os
-        recibos pendentes são desfeitos, cada FD fechado uma única vez.
+        Rollback COMPLETO (todas as etapas de limpeza concluídas): se uma etapa
+        falhar, nenhum grant fica emitido (um primeiro grant já emitido é
+        desfeito) e os dois FDs, as âncoras e os recibos pendentes são desfeitos,
+        cada FD fechado uma única vez; a exceção original (ou `make_pipe_failed`)
+        sobe. Rollback INCOMPLETO (alguma etapa da própria limpeza falhou, p. ex.
+        um `os.close` que levanta): sobe `BootRefused("rollback_incomplete")`; um
+        grant e sua âncora podem permanecer no registro (liberados por `close()`
+        se o chamador conservar o registro). `close_uncertain` torna-se True
+        SOMENTE para o fechamento incerto de ÂNCORAS do registro (inclusive as do
+        ledger); um extremo local incerto (leitura/escrita do pipe, do chamador)
+        só torna o rollback incompleto. Nunca afirma limpeza integral nesse caso.
         """
         self._require_open()
+        # Ledger e recibos reservados ANTES do pipe2: nenhuma alocação entre a
+        # syscall e o registro. slots: [leitura, escrita, âncora leitura, âncora escrita].
+        slots = [-1, -1, -1, -1]
+        read_receipt, write_receipt = _Created(), _Created()
         try:
-            r, w = os.pipe2(os.O_CLOEXEC)
+            slots[0], slots[1] = os.pipe2(os.O_CLOEXEC)
         except OSError:
             raise BootRefused("make_pipe_failed") from None
-        owned = [r, w]
-        receipts, committed = [], []
         try:
-            for fd, purpose in ((r, "supervisor_pipe_read"), (w, "supervisor_pipe_write")):
-                state = _describe_fd(fd)
-                anchor = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
-                owned.append(anchor)
-                receipt = _Created(fd, anchor, state, purpose, False)
-                receipts.append(receipt)
-                self._pending.append(receipt)
-            for receipt in receipts:
-                self._issue(receipt)
-                committed.append(receipt)
-                owned.remove(receipt.anchor)   # âncora agora é do registro
+            self._stage(slots, 0, 2, read_receipt, "supervisor_pipe_read")
+            self._stage(slots, 1, 3, write_receipt, "supervisor_pipe_write")
+            self._issue(read_receipt)
+            slots[2] = -1                      # âncora agora é do registro
+            self._issue(write_receipt)
+            slots[3] = -1
+            result = (slots[0], slots[1])      # dentro do try: falha desfaz tudo
         except BaseException as e:
-            for receipt in committed:
-                self._revoke(receipt.fd)       # fecha a âncora do registro uma vez
-            self._drop_pending(*receipts)
-            for fd in list(owned):
-                _release(owned, fd)
+            # Rollback derivado de `used` (não de uma lista posterior). TODAS as
+            # etapas independentes são tentadas, mesmo se uma falhar (cada uma em
+            # seu próprio try): grants emitidos são desfeitos por `_undo_issue`
+            # (fecha a âncora do registro uma vez, sem recalcular id()); o ledger
+            # nunca fecha a âncora de um grant emitido. Se algo falhar, a falha é
+            # SINALIZADA (`rollback_incomplete`), não escondida.
+            clean = True
+            try:
+                if read_receipt.used:
+                    self._undo_issue(read_receipt)
+            except BaseException:
+                clean = False
+            try:
+                if write_receipt.used:
+                    self._undo_issue(write_receipt)
+            except BaseException:
+                clean = False
+            try:
+                self._drop_pending(read_receipt)
+            except BaseException:
+                clean = False
+            try:
+                self._drop_pending(write_receipt)
+            except BaseException:
+                clean = False
+            # âncoras do ledger (também tornam close_uncertain True) e FDs locais
+            # (extremos do pipe, do chamador): falha em qualquer um = rollback
+            # incompleto, nunca absorvida
+            if not self._drop_slot(slots, 2, read_receipt.used, True):
+                clean = False
+            if not self._drop_slot(slots, 3, write_receipt.used, True):
+                clean = False
+            if not self._drop_slot(slots, 0):
+                clean = False
+            if not self._drop_slot(slots, 1):
+                clean = False
+            if not clean:
+                raise BootRefused("rollback_incomplete") from None
             if isinstance(e, (OSError, BootRefused)):
                 raise BootRefused("make_pipe_failed") from None
             raise
-        self._drop_pending(*receipts)
-        return r, w
+        self._drop_pending(read_receipt)
+        self._drop_pending(write_receipt)
+        return result
+
+    def _stage(self, slots, i, anchor_i, receipt, purpose):
+        """Descreve o FD do slot `i`, cria a âncora no slot `anchor_i` e reserva o
+        recibo em `_pending`. Só atribuições entre a syscall e o registro."""
+        fd = slots[i]
+        state = _describe_fd(fd)
+        slots[anchor_i] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+        receipt.fd, receipt.anchor, receipt.entry = fd, slots[anchor_i], state
+        receipt.purpose, receipt.inheritable = purpose, False
+        self._claim_pending(receipt)
 
 
 def _list_fd_names():

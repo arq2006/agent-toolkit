@@ -7,9 +7,21 @@ fstat + statx(AT_EMPTY_PATH). Qualquer requisito mínimo não comprovado resulta
 em recusa (RootRefused); nunca em sucesso implícito.
 
 NÃO é autorização: identidade de raiz não equivale a concessão do proprietário,
-autenticação, proteção contra ABA ou exclusão de escritores externos. Não
-aceita caminho de projeto real: somente diretórios criados por
-make_synthetic_fixture(). STRONG=UNAVAILABLE e readiness=BLOCKED permanecem.
+autenticação, proteção contra ABA ou exclusão de escritores externos.
+
+Proveniência: a CLI cria a PRÓPRIA fixture com make_synthetic_fixture() e só
+remove o que esse registro (_CREATED, com identidade (dev, ino)) prova ter
+criado. open_synthetic_root() NÃO comprova a origem do diretório: prefixo de
+nome e marcador são apenas guardas contra uso acidental com caminhos reais, e
+um diretório com o mesmo nome e conteúdo, criado por outro, é aceito por essa
+API. A1 continua NOT_VERIFIED e A3 fora da garantia.
+
+Contexto de namespace: `mnt_ns` é "mnt:[N]" ou None. None significa que o
+namespace de montagem NÃO foi observado (observação incompleta); não autoriza
+nada, e compare() recusa (mount_namespace_unknown) qualquer comparação em que
+um dos lados seja None.
+
+STRONG=UNAVAILABLE e readiness=BLOCKED permanecem.
 """
 import ctypes
 import dataclasses
@@ -212,7 +224,8 @@ class RootIdentity:
     ino: int
     mnt_id: int
     mnt_id_variant: str  # "unique" | "legacy"; valores de variantes não se comparam
-    mnt_ns: object       # link de /proc/self/ns/mnt (contexto) ou None
+    mnt_ns: object       # "mnt:[N]" (/proc/self/ns/mnt) ou None = não observado
+                         # (observação incompleta: nunca autoriza; compare() recusa)
     statx_mask: int
 
 
@@ -456,7 +469,8 @@ def open_synthetic_root(anchor_fd, name):
     """Abre e identifica uma raiz sintética sob anchor_fd.
 
     O nome deve começar por SYNTHETIC_PREFIX e a pasta conter o marcador:
-    guardas contra uso acidental com caminhos reais, não prova de origem.
+    guardas contra uso acidental com caminhos reais, NÃO prova de que o
+    diretório foi criado por make_synthetic_fixture() (não consulta _CREATED).
     """
     _check_name(name)
     if not name.startswith(SYNTHETIC_PREFIX):

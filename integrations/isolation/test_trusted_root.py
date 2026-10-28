@@ -227,6 +227,31 @@ class MixedTests(FixtureCase):
             return stx
         return mock.patch.object(T, "_sys_statx", side_effect=fake)
 
+    def test_unreadable_mount_namespace_is_incomplete_observation_not_authorization(self):
+        # Teste MISTO (kernel real + `_mnt_ns` forçado a None por mock): com
+        # /proc/self/ns/mnt ilegível a observação continua possível (mnt_ns=None),
+        # mas é INCOMPLETA: não autoriza nada e toda comparação é recusada.
+        with mock.patch.object(T, "_mnt_ns", return_value=None):
+            with self.open_root() as root:
+                self.assertIsNone(root.identity.mnt_ns)
+                report = root.describe()
+                report["result"] = "IDENTITY_OBSERVED_NOT_AUTHORIZED"
+                report["cleanup_failures"] = []
+                T.check_root_report(report)                 # forma/coerência: aceito
+                self.assertIsNone(report["identity"]["mnt_ns"])
+                self.assertEqual(report["strong"], "UNAVAILABLE")
+                self.assertEqual(report["readiness"], "BLOCKED")
+                for name in ("owner_authenticated", "owner_grant_implemented",
+                             "aba_protection_proven", "external_writers_excluded",
+                             "anchor_provenance_verified"):
+                    self.assertIs(report[name], False, name)
+                self.assertEqual(report["identity_scope"], "comparison_only")
+                self.refused("mount_namespace_unknown", root.reopen_and_compare,
+                             self.anchor, self.name)
+        with self.open_root() as root:                       # controle: namespace legível
+            self.assertIsNotNone(root.identity.mnt_ns)
+            root.reopen_and_compare(self.anchor, self.name)
+
     def test_required_mask_bit_missing_is_refused(self):
         with self.patched_statx(lambda s, m: setattr(s, "stx_mask", s.stx_mask & ~T.STATX_INO)):
             self.refused("identity_incomplete", self.open_root)
@@ -570,6 +595,17 @@ class CliFaultInjectionTests(IsolatedTmpCase):
         self.assertEqual(report["cleanup_failures"], ["anchor_close", "fixture_remove"])
         self.assertEqual(report["result"], "OBSERVED_WITH_CLEANUP_FAILURE")
 
+    @staticmethod
+    def closing_then_raising(exc):
+        """`OpenedRoot.close` que executa o close REAL (o FD é fechado de verdade) e
+        depois levanta `exc`: simula uma falha durante o fechamento sem vazar FD."""
+        real_close = T.OpenedRoot.close
+
+        def close(root):
+            real_close(root)
+            raise exc
+        return close
+
     def assert_cleanup_report(self, *, failures, result="OBSERVED_WITH_CLEANUP_FAILURE",
                               residue=None, secrets=("/secret/path", "fictional-user")):
         rc, out, err, before = self.run_main()
@@ -583,12 +619,60 @@ class CliFaultInjectionTests(IsolatedTmpCase):
         self.assertNotIn("RuntimeError", out + err)
         return report, before
 
+    @staticmethod
+    def tracking(leaked):
+        """Patch que registra, em `leaked`, o FD e a identidade `(dev, ino)` de cada
+        raiz que a CLI abrir. Serve para o TESTE liberar, fora do mock, o FD que um
+        `close` falsificado que levanta ANTES de fechar deixa aberto."""
+        real_open = T.open_synthetic_root
+
+        def tracked(anchor_fd, name):
+            root = real_open(anchor_fd, name)
+            st = os.fstat(root.fd)
+            leaked.append((root.fd, (st.st_dev, st.st_ino)))
+            return root
+        return mock.patch.object(T, "open_synthetic_root", side_effect=tracked)
+
+    @staticmethod
+    def release_tracked(leaked):
+        """Fecha (uma única vez, com o `os.close` real) o FD de raiz que o `close`
+        falsificado deixou aberto.
+
+        CONTRATO (limitado de propósito): uso SEQUENCIAL no mesmo teste, logo após
+        a execução da CLI. O requisito é que o FD RASTREADO não seja fechado nem
+        reutilizado entre o rastreamento e a liberação; aberturas transitórias de
+        OUTROS FDs (da CLI, de `open_fds()` etc.) não são proibidas. Os testes
+        afirmam antes que o único FD a mais é exatamente o rastreado. A comparação
+        `(dev, ino)` é só uma
+        verificação de sanidade: NÃO prova identidade de open file description e
+        NÃO protege contra o número ter sido reaproveitado por outra abertura do
+        MESMO diretório. Se o número aponta para outro `(dev, ino)`, nada é fechado
+        e o teste falha (resultado desconhecido nunca vira um close). A entrada sai
+        da lista antes de qualquer close."""
+        while leaked:
+            fd, ident = leaked.pop()
+            try:
+                st = os.fstat(fd)
+            except OSError:
+                continue                 # já fechado: nada a liberar
+            if (st.st_dev, st.st_ino) != ident:
+                raise AssertionError(
+                    "FD rastreado %d mudou de identidade: não será fechado" % fd)
+            os.close(fd)
+
     def test_unexpected_exceptions_in_each_cleanup_step_are_sanitized(self):
         boom = RuntimeError("/secret/path /home/fictional-user/segredo")
-        with mock.patch.object(T.OpenedRoot, "close", side_effect=boom):
-            self.assert_cleanup_report(failures=["root_close"])
-        # o FD da raiz NÃO foi fechado (close falsificado): é o custo do mock; o
-        # restante da limpeza (âncora e fixture) continuou e foi concluído
+        leaked = []
+        self.addCleanup(self.release_tracked, leaked)     # rede de segurança em falha
+        # Cenário ORIGINAL: `close` da raiz levanta ANTES de fechar o FD.
+        with self.tracking(leaked), mock.patch.object(T.OpenedRoot, "close", side_effect=boom):
+            report, before = self.assert_cleanup_report(failures=["root_close"])
+        # o mock não fechou o FD real: é exatamente o FD rastreado que sobra aberto
+        self.assertEqual(len(leaked), 1)
+        self.assertEqual(open_fds() - before, {str(leaked[0][0])})
+        self.release_tracked(leaked)                      # liberado pelo teste, fora do mock
+        self.assertEqual(open_fds(), before)
+        # o restante da limpeza (âncora e fixture) continuou e foi concluído
         self.assertEqual(os.listdir(self.iso), [])
         real_close, seen = os.close, {}
         real_open_anchor = T.open_anchor
@@ -612,9 +696,44 @@ class CliFaultInjectionTests(IsolatedTmpCase):
 
     def test_consecutive_unexpected_cleanup_failures_are_all_recorded(self):
         boom = RuntimeError("/home/fictional-user/segredo")
-        with mock.patch.object(T.OpenedRoot, "close", side_effect=boom), \
-                mock.patch.object(T.shutil, "rmtree", side_effect=boom):
-            self.assert_cleanup_report(failures=["fixture_remove", "root_close"])
+        leaked = []
+        self.addCleanup(self.release_tracked, leaked)
+        start = open_fds()
+        for _ in range(3):      # repetição: o conjunto de FDs volta ao inicial
+            # Cenário ORIGINAL: `close` levanta antes de fechar; `rmtree` também falha.
+            with self.tracking(leaked), \
+                    mock.patch.object(T.OpenedRoot, "close", side_effect=boom), \
+                    mock.patch.object(T.shutil, "rmtree", side_effect=boom):
+                report, before = self.assert_cleanup_report(
+                    failures=["fixture_remove", "root_close"])
+            self.assertEqual(len(leaked), 1)
+            self.assertEqual(open_fds() - before, {str(leaked[0][0])})
+            self.release_tracked(leaked)                  # fora do mock
+            self.assertEqual(open_fds(), before)
+            self.assertEqual(open_fds(), start)
+            # a fixture que o rmtree falsificado não removeu é só diretório; limpa-se
+            for name in os.listdir(self.iso):
+                shutil.rmtree(os.path.join(self.iso, name))
+
+    def test_unexpected_exception_after_the_real_root_close_leaves_no_fd(self):
+        # Cobertura ADICIONAL (não substitui o cenário "antes de fechar" acima): o
+        # `close` real fecha o FD e só então a exceção inesperada sobe.
+        boom = RuntimeError("/home/fictional-user/segredo")
+        start = open_fds()
+        for rmtree_fails in (False, True, False):
+            patches = [mock.patch.object(T.OpenedRoot, "close", self.closing_then_raising(boom))]
+            failures = ["root_close"]
+            if rmtree_fails:
+                patches.append(mock.patch.object(T.shutil, "rmtree", side_effect=boom))
+                failures = ["fixture_remove", "root_close"]
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                report, before = self.assert_cleanup_report(failures=failures)
+            self.assertEqual(open_fds(), before)
+            self.assertEqual(open_fds(), start)
+            for name in os.listdir(self.iso):
+                shutil.rmtree(os.path.join(self.iso, name))
 
     def test_unexpected_cleanup_failure_after_refusal_stays_refused(self):
         boom = RuntimeError("/home/fictional-user/segredo")
@@ -799,6 +918,25 @@ class PureMockTests(unittest.TestCase):
         self.refused("mount_namespace_unknown", T.compare, dc.replace(base, mnt_ns=None), base)
         self.refused("invalid_identity", T.compare, base, {"dev": 1})
         self.refused("invalid_identity", T.compare, None, base)
+
+    def test_mnt_ns_none_contract(self):
+        # mnt_ns=None = observação incompleta: relatório coerente aceito, comparação
+        # recusada em qualquer combinação; valores que não sejam None nem "mnt:[N]"
+        # são recusados pelo esquema.
+        ident = valid_observed()["identity"]
+        incomplete = valid_observed(identity={**ident, "mnt_ns": None})
+        T.check_root_report(incomplete)
+        for name in ("owner_authenticated", "owner_grant_implemented"):
+            self.assertIs(incomplete[name], False)
+        known = T.RootIdentity(1, 2, 3, "unique", "mnt:[1]", 0x1100)
+        unknown = dc.replace(known, mnt_ns=None)
+        self.refused("mount_namespace_unknown", T.compare, known, unknown)
+        self.refused("mount_namespace_unknown", T.compare, unknown, known)
+        self.refused("mount_namespace_unknown", T.compare, unknown, unknown)
+        T.compare(known, known)                               # controle positivo
+        for bad in ("", "mnt:[]", "/proc/self/ns/mnt", 0, b"mnt:[1]", ["mnt:[1]"]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                T.check_root_report(valid_observed(identity={**ident, "mnt_ns": bad}))
 
     def test_check_root_report_rejects_contradictions(self):
         ok = T._refused_report("xdev_refused", ["fixture_remove"])
